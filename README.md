@@ -1,4 +1,4 @@
-# Mosaic
+# Barnyard Karaoke
 
 
 ## Usage
