@@ -9,3 +9,6 @@
 
 *.wav
 *.ogg
+
+out/
+.idea
