@@ -117,8 +117,7 @@ def main():
     plt.close()
     print(f"\nWrote {plot_path}")
 
-    # Demo mix, mono: the reconstruction over a quiet copy of the target. Hard-panning the
-    # reconstruction one way and the target the other misrepresents how the result sounds.
+    # Demo mix, mono: the reconstruction over a quiet copy of the target.
     mix = (generated_audio * 0.7 + target_audio * args.target_gain).astype(np.float32)
     peak = np.abs(mix).max()
     if peak > 1.0:

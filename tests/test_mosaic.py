@@ -98,7 +98,7 @@ def test_frames_are_notes_not_note_plus_rest(tmpdir):
           bool(np.all(lengths < NOTE_SECONDS + REST_SECONDS)),
           f"longest={lengths.max():.3f}s, note+rest={NOTE_SECONDS + REST_SECONDS}s")
 
-    # The old framing would have run each frame into the following silence.
+    # A frame that reached into the following rest would show up as low RMS.
     quietest = min(float(np.sqrt(np.mean(audio[r["start_sample"]:r["end_sample"]] ** 2)))
                    for r in rows)
     check("every frame is voiced throughout (no rest folded in)", quietest > 0.05,
@@ -108,11 +108,10 @@ def test_frames_are_notes_not_note_plus_rest(tmpdir):
 
 
 def test_scaling_rebalances_the_real_collection():
-    print("\nStandardising restores pitch to the distance (frozen pre-fix violin data)")
-    fixtures = os.path.join(os.path.dirname(__file__), "fixtures")
-    df_source = pd.read_csv(os.path.join(fixtures, "prefix-analysis_violin_source.csv"),
-                            index_col=0)
-    df_target = pd.read_csv(os.path.join(fixtures, "prefix-analysis_over_the_rainbow_target.csv"),
+    print("\nStandardising rebalances the distance (real barnyard collection)")
+    data = os.path.join(os.path.dirname(__file__), "..", "src")
+    df_source = pd.read_csv(os.path.join(data, "dataframe_barnyard_source.csv"), index_col=0)
+    df_target = pd.read_csv(os.path.join(data, "dataframe_over_the_rainbow_target.csv"),
                             index_col=0)
     features = mosaic.FEATURE_COLUMNS
 
@@ -128,8 +127,8 @@ def test_scaling_rebalances_the_real_collection():
     print(f"      loudness share of squared distance: {raw_share[loud]:.3%} -> {scaled_share[loud]:.3%}")
     print(f"      mfcc_0   share of squared distance: {raw_share[0 + features.index('mfcc_0')]:.3%} -> {scaled_share[features.index('mfcc_0')]:.3%}")
 
-    check("pitch was negligible on raw columns", raw_share[pitch] < 0.01)
-    check("loudness was entirely absent on raw columns", raw_share[loud] < 1e-6)
+    check("pitch is negligible on raw columns", raw_share[pitch] < 0.01)
+    check("loudness is entirely absent on raw columns", raw_share[loud] < 1e-6)
     check("no feature dominates after scaling", scaled_share.max() < 0.35,
           f"max share={scaled_share.max():.1%} ({features[int(scaled_share.argmax())]})")
     check("pitch is now a meaningful share", scaled_share[pitch] > 0.02,

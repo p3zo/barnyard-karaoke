@@ -35,8 +35,7 @@ COLLECTIONS = {
 
 
 def query_freesound(client, query, filter, sort, num_results):
-    # search() returns the first page already loaded, so iterate it directly. The older
-    # text_search() this replaced needed an explicit next_page() first.
+    # search() returns the first page already loaded, so iterate it directly.
     pager = client.search(
         query=query,
         filter=filter,

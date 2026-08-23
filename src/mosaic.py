@@ -16,11 +16,10 @@ SAMPLE_RATE = 44100
 MELODIA_FRAME_SIZE = 2048
 MELODIA_HOP_SIZE = 128
 
-# MFCCs are averaged over fixed-size windows rather than computed in one shot
-# over a whole note. A single FFT over a whole note makes the coefficients a
-# function of note length: the same 440 Hz tone yields mfcc_1 = 200 over a
-# 2048-sample frame but 81 over an 88200-sample one, so frames of different
-# lengths are not comparable. Averaging fixed windows holds it to within 1%.
+# MFCCs are averaged over fixed-size windows so that notes of different lengths
+# stay comparable. One FFT across a whole note makes the coefficients a function
+# of its length: a 440 Hz tone gives mfcc_1 = 200 over 2048 samples and 81 over
+# 88200. Averaging fixed windows holds that to within 1%.
 MFCC_FRAME_SIZE = 2048
 MFCC_HOP_SIZE = 1024
 N_MFCC = 13
@@ -97,9 +96,8 @@ def segment_notes(audio, min_duration, pitch_distance_threshold=30, rms_threshol
 def analyze_sound(audio_path, min_duration, audio_id=None, **segmentation_kwargs):
     """Describe every note in a sound as a row of features.
 
-    A note spans onset -> onset + duration. Using the next onset as the end
-    instead would fold the rest that follows a note into the note itself and
-    drop the final note of every sound.
+    A note spans onset -> onset + duration, so it covers the note itself and
+    not the rest that follows it.
     """
     audio = load_audio(audio_path)
     onsets, durations, midi_pitches, _ = segment_notes(
@@ -165,9 +163,9 @@ def analyze_collection(df, min_duration, **segmentation_kwargs):
 def standardize(df_source, df_target, features):
     """Put features on a common scale, fitted on the source collection.
 
-    Without this the nearest-neighbour distance is meaningless: mfcc_0 spans
-    ~700 units, mean_pitch ~50 and loudness ~0.006, so on raw columns mfcc_0
-    accounts for over half the squared distance and loudness for none of it.
+    The raw columns differ by orders of magnitude -- mfcc_0 spans ~700 units,
+    mean_pitch ~50, loudness ~0.006 -- so an unscaled distance is almost
+    entirely mfcc_0 and not at all loudness.
     """
     values = df_source[features].to_numpy(dtype=float)
     mean = values.mean(axis=0)
@@ -202,17 +200,14 @@ def select_source_frame(
     random.
 
     Pitch has to win outright rather than compete on distance. It is one
-    feature against thirteen MFCCs, so ranking the whole pool at once picks a
-    timbrally closer frame a semitone flat even where an exact match exists.
-    Ranking on pitch alone and drawing uniformly from the ten nearest is no
-    better: for a target of MIDI 60 the ten nearest frames in the violin
-    collection are 58-62 with no exact match at all.
+    feature against thirteen MFCCs, so ranking the whole pool at once buys a
+    closer timbre at the cost of a semitone even where an exact match exists.
 
     Candidates that would need more than `max_gain` to reach the target note's
     level are then dropped. Freesound recordings span a ~350x range in level,
     and a frame recorded 40 dB down cannot be raised to sit with the others
     without dragging its noise floor up with it. Every note in the barnyard
-    collection has a same-pitch frame that needs at most 1.5x, so this costs
+    collection has a same-pitch frame needing at most 1.5x, so this costs
     very little choice.
 
     Returns (row, pitch_deviation, level_limited), where `level_limited` says
@@ -249,19 +244,16 @@ def select_source_frame(
 
 
 def render_frame(source_audio, source_row, n_samples, fade_samples=220):
-    """Cut `n_samples` from a source frame, never reading past the frame's end.
+    """Cut up to `n_samples` from a source frame, stopping at the frame's end.
 
-    Slicing the target's length out of the source ignores how long the source
-    note actually is; half the eligible picks in the violin collection are
-    shorter than the target frame, so the segment would run past the analysed
-    note into whatever follows it in the file.
+    Source notes are often shorter than the target note they fill, and reading
+    on past the end would pull in whatever follows in the source recording.
     """
     start = int(source_row["start_sample"])
     end = int(source_row["end_sample"])
     segment = np.array(source_audio[start : min(end, start + n_samples)], dtype=np.float64)
 
-    # Butt-joined segments click at the splice; a short fade costs 5 ms of the
-    # note and removes the discontinuity at both ends.
+    # A short fade costs 5 ms of the note and keeps the splice from clicking.
     fade = min(fade_samples, len(segment) // 2)
     if fade > 0:
         ramp = np.linspace(0.0, 1.0, fade)
@@ -278,10 +270,9 @@ def _rms(samples):
 def match_loudness(segment, target_note, max_gain=10.0):
     """Scale `segment` to sit at the same RMS as the target note it replaces.
 
-    Freesound recordings arrive at wildly different levels, so without this a
-    close-mic'd bark lands ten times louder than a distant moo and the melody
-    is buried under whichever samples happened to be recorded hottest. Matching
-    the target note also carries the original melody's dynamics across.
+    Freesound recordings arrive at wildly different levels, and a close-mic'd
+    bark would otherwise sit ten times louder than a distant moo. Matching the
+    target note also carries the original melody's dynamics across.
 
     The gain is capped, since a near-silent segment would otherwise be
     amplified into whatever noise it contains, and further limited so the
@@ -385,8 +376,7 @@ def reconstruct(
         "truncated_frames": sum(
             1 for p in placements if p["placed_samples"] < p["requested_samples"]
         ),
-        # How far apart the placed segments sit in level. Before loudness matching
-        # this routinely spanned an order of magnitude across one reconstruction.
+        # How far apart the placed segments sit in level.
         "rms_spread": (
             max(p["rms"] for p in placements) / min(p["rms"] for p in placements)
             if placements and min(p["rms"] for p in placements) > 0

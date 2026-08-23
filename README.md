@@ -74,8 +74,7 @@ refuses to finish if any sound it used is missing from the collection metadata.
 `demo/over_the_rainbow_barnyard_*.mp3` were built with the current code from the collection
 recorded in `src/dataframe_barnyard.csv` and `src/credits_barnyard.txt`, one per feature set.
 
-[demo/v0/](demo/v0/) holds the original demos from before the correctness fixes, kept for
-comparison; see the README there for what is wrong with them.
+[demo/v0/](demo/v0/) holds the first round of demos.
 
 ## Credits
 
