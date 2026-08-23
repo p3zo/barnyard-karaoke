@@ -12,3 +12,6 @@
 
 out/
 .idea
+
+.env
+__pycache__/
