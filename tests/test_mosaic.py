@@ -105,11 +105,11 @@ def test_frames_are_notes_not_note_plus_rest(tmpdir):
 
 
 def test_scaling_rebalances_the_real_collection():
-    print("\nStandardising restores pitch to the distance (committed violin data)")
-    here = os.path.dirname(__file__)
-    df_source = pd.read_csv(os.path.join(here, "..", "src", "dataframe_violin_source.csv"),
+    print("\nStandardising restores pitch to the distance (frozen pre-fix violin data)")
+    fixtures = os.path.join(os.path.dirname(__file__), "fixtures")
+    df_source = pd.read_csv(os.path.join(fixtures, "prefix-analysis_violin_source.csv"),
                             index_col=0)
-    df_target = pd.read_csv(os.path.join(here, "..", "src", "dataframe_violin_target.csv"),
+    df_target = pd.read_csv(os.path.join(fixtures, "prefix-analysis_over_the_rainbow_target.csv"),
                             index_col=0)
     features = mosaic.FEATURE_COLUMNS
 
