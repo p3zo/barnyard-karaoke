@@ -2,8 +2,8 @@
 
     python src/download_collection.py --collection barnyard
 
-Writes dataframe_<collection>.csv, files_<collection>/ and credits_<collection>.txt
-into the working directory. Needs a Freesound API key in .env at the repo root.
+Writes collection.csv, credits.txt and sounds/ into data/collections/<collection>/.
+Needs a Freesound API key in .env at the repo root.
 """
 
 import argparse
@@ -12,6 +12,8 @@ import os
 import freesound
 import pandas as pd
 from dotenv import load_dotenv
+
+import paths
 
 METADATA_FIELDS = ["id", "name", "username", "previews", "license", "tags"]
 
@@ -64,9 +66,9 @@ def main():
     client = freesound.FreesoundClient()
     client.set_token(os.environ["FREESOUND_API_KEY"])
 
-    files_dir = f"files_{args.collection}"
-    dataframe_path = f"dataframe_{args.collection}.csv"
-    credits_path = f"credits_{args.collection}.txt"
+    files_dir = paths.collection_sounds(args.collection)
+    dataframe_path = paths.collection_csv(args.collection)
+    credits_path = paths.collection_credits(args.collection)
     os.makedirs(files_dir, exist_ok=True)
 
     sounds = []

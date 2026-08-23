@@ -13,7 +13,7 @@ import subprocess
 import sys
 import tempfile
 
-SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src")
+ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
 FIXTURE = r'''
 import os
@@ -38,57 +38,58 @@ def write(path, samples):
         essentia.array(np.asarray(samples, dtype=np.float32)))
 
 rng = np.random.default_rng(0)
-os.makedirs("files_testing", exist_ok=True)
-os.makedirs("targets", exist_ok=True)
-os.makedirs(os.path.join("..", "demo"), exist_ok=True)
+SOUNDS = os.path.join("data", "collections", "testing", "sounds")
+TARGET = os.path.join("data", "targets", "t")
+os.makedirs(SOUNDS, exist_ok=True)
+os.makedirs(TARGET, exist_ok=True)
 
 rest = np.zeros(int(0.25 * FS))
-write("targets/t.wav", np.concatenate(
+write(os.path.join(TARGET, "audio.wav"), np.concatenate(
     sum([[tone(m, 0.9, rng), rest] for m in [60, 62, 64, 65, 67]], [])))
 
 records = []
 for i, midi in enumerate([60, 62, 64, 65, 67] * 3):
-    path = "files_testing/s%d.wav" % i
+    path = os.path.join(SOUNDS, "s%d.wav" % i)
     write(path, tone(midi, 1.1, rng))
     records.append(dict(name="tone %d" % midi, username="tester", license="CC0",
                         tags="['tone']", freesound_id=1000 + i, path=path))
 # Unpitched, so analyze.py has something to report as yielding no frames.
 for j in range(2):
-    path = "files_testing/n%d.wav" % j
+    path = os.path.join(SOUNDS, "n%d.wav" % j)
     write(path, 0.2 * rng.standard_normal(int(0.6 * FS)))
     records.append(dict(name="noise %d" % j, username="tester", license="CC-BY",
                         tags="['noise']", freesound_id=2000 + j, path=path))
-pd.DataFrame(records).to_csv("dataframe_testing.csv")
+pd.DataFrame(records).to_csv(os.path.join("data", "collections", "testing", "collection.csv"))
 print("fixture ready")
 '''
 
 EXPECTED = [
-    "dataframe_testing_source.csv",
-    "dataframe_t_target.csv",
-    "targets/t.wav.pitch.reconstructed.wav",
-    "../demo/t_testing_pitch_mix.mp3",
-    "plot_testing_pitch_coverage.png",
-    "plot_t_pitch_contour.png",
-    "plot_t_notes.png",
-    "plot_t_testing_pitch_reconstruction.png",
+    "data/collections/testing/frames.csv",
+    "data/targets/t/notes.csv",
+    "out/reconstructions/t_testing_pitch_concatenate.wav",
+    "demo/t_testing/by-fill-strategy/concatenate.mp3",
+    "out/plots/testing_pitch_coverage.png",
+    "out/plots/t_pitch_contour.png",
+    "out/plots/t_notes.png",
+    "out/plots/t_testing_pitch_concatenate.png",
 ]
 
 
 def main():
-    tmp = tempfile.mkdtemp()
-    work = os.path.join(tmp, "src")
-    os.makedirs(work)
-    for name in ("mosaic.py", "analyze.py", "reconstruct.py"):
-        shutil.copy(os.path.join(SRC, name), work)
+    work = tempfile.mkdtemp()
+    src = os.path.join(work, "src")
+    os.makedirs(src)
+    for name in ("mosaic.py", "paths.py", "analyze.py", "reconstruct.py"):
+        shutil.copy(os.path.join(ROOT, "src", name), src)
     with open(os.path.join(work, "_fixture.py"), "w") as f:
         f.write(FIXTURE)
 
     steps = [
         (["_fixture.py"], "build fixture"),
-        (["analyze.py", "--collection", "testing"], "analyze collection"),
-        (["analyze.py", "--target", "t", "--target-path", "targets/t.wav"], "analyze target"),
-        (["reconstruct.py", "--collection", "testing", "--target", "t",
-          "--features", "pitch"], "reconstruct"),
+        (["src/analyze.py", "--collection", "testing"], "analyze collection"),
+        (["src/analyze.py", "--target", "t"], "analyze target"),
+        (["src/reconstruct.py", "--collection", "testing", "--target", "t",
+          "--features", "pitch", "--fill", "concatenate"], "reconstruct"),
     ]
 
     failed = False
@@ -109,7 +110,7 @@ def main():
         size = f" ({os.path.getsize(path)} bytes)" if exists else ""
         print(f"  {'PASS' if exists else 'FAIL'}  wrote {artifact}{size}")
 
-    shutil.rmtree(tmp)
+    shutil.rmtree(work)
     print()
     if failed:
         print("FAILED")

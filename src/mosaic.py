@@ -5,6 +5,10 @@ frame is, how it is described, and which source frame replaces it lives here so
 it can be tested (see tests/test_mosaic.py).
 """
 
+import os
+import subprocess
+import tempfile
+
 import numpy as np
 import essentia
 import essentia.standard as estd
@@ -26,6 +30,14 @@ N_MFCC = 13
 
 # Essentia's Loudness is Stevens' law: energy ** LOUDNESS_EXPONENT.
 LOUDNESS_EXPONENT = 0.67
+
+# How a source note that is shorter than the target note gets to fill it.
+#   truncate    play it once and leave the remainder silent
+#   longest     pick the longest frame at the right pitch, then truncate
+#   concatenate run consecutive frames at the right pitch together
+#   loop        repeat the one frame until the note is filled
+#   stretch     slow the one frame down to the note's length
+FILL_STRATEGIES = ("truncate", "longest", "concatenate", "loop", "stretch")
 
 MFCC_FEATURES = [f"mfcc_{i}" for i in range(N_MFCC)]
 FEATURE_COLUMNS = ["mean_pitch", "loudness"] + MFCC_FEATURES
@@ -190,6 +202,8 @@ def select_source_frame(
     n_candidates=10,
     max_pitch_deviation=0,
     max_gain=10.0,
+    prefer="similar",
+    exclude=(),
 ):
     """Pick a source frame to stand in for one target frame.
 
@@ -215,8 +229,11 @@ def select_source_frame(
     """
     target_pitch = float(target_row["mean_pitch"])
     deviations = np.abs(df_source["mean_pitch"].to_numpy(dtype=float) - target_pitch)
+    if len(exclude):
+        deviations = np.where(np.isin(np.arange(len(deviations)), list(exclude)),
+                              np.inf, deviations)
     best = deviations.min()
-    if best > max_pitch_deviation:
+    if not np.isfinite(best) or best > max_pitch_deviation:
         raise ValueError(
             f"No source frame within {max_pitch_deviation} semitones of MIDI "
             f"{target_pitch} (closest is {best:.0f} away). Widen "
@@ -237,9 +254,16 @@ def select_source_frame(
         level_limited = True
         eligible = eligible[[int(np.argmin(needed_gain))]]
 
-    distances = np.linalg.norm(source_scaled[eligible] - target_scaled[target_index], axis=1)
-    closest = eligible[np.argsort(distances)[:n_candidates]]
-    chosen = int(rng.choice(closest))
+    if prefer == "longest":
+        lengths = (df_source["end_sample"].to_numpy() - df_source["start_sample"].to_numpy())
+        chosen = int(eligible[np.argmax(lengths[eligible])])
+    else:
+        distances = np.linalg.norm(
+            source_scaled[eligible] - target_scaled[target_index], axis=1
+        )
+        closest = eligible[np.argsort(distances)[:n_candidates]]
+        chosen = int(rng.choice(closest))
+
     return df_source.iloc[chosen], float(deviations[chosen]), level_limited
 
 
@@ -252,15 +276,71 @@ def render_frame(source_audio, source_row, n_samples, fade_samples=220):
     start = int(source_row["start_sample"])
     end = int(source_row["end_sample"])
     segment = np.array(source_audio[start : min(end, start + n_samples)], dtype=np.float64)
+    return apply_fades(segment, fade_samples)
 
-    # A short fade costs 5 ms of the note and keeps the splice from clicking.
+
+def apply_fades(segment, fade_samples):
+    """Ramp both ends to zero so a splice does not click."""
+    segment = np.array(segment, dtype=np.float64)
     fade = min(fade_samples, len(segment) // 2)
     if fade > 0:
         ramp = np.linspace(0.0, 1.0, fade)
         segment[:fade] *= ramp
         segment[-fade:] *= ramp[::-1]
-
     return segment
+
+
+def _atempo_chain(rate):
+    """Decompose a tempo change into factors ffmpeg's atempo accepts (0.5-2.0)."""
+    factors = []
+    while rate < 0.5:
+        factors.append(0.5)
+        rate /= 0.5
+    while rate > 2.0:
+        factors.append(2.0)
+        rate /= 2.0
+    factors.append(rate)
+    return factors
+
+
+def time_stretch(segment, n_samples):
+    """Stretch `segment` to `n_samples` without moving its pitch.
+
+    Uses ffmpeg's atempo, a WSOLA implementation, rather than a hand-rolled
+    one, so the comparison against the other fill strategies is not skewed by
+    the quality of the stretcher.
+    """
+    if len(segment) == 0 or n_samples <= 0 or len(segment) == n_samples:
+        return segment[:n_samples]
+
+    rate = len(segment) / n_samples
+    chain = ",".join(f"atempo={f:.6f}" for f in _atempo_chain(rate))
+
+    with tempfile.TemporaryDirectory() as tmp:
+        raw = os.path.join(tmp, "in.wav")
+        out = os.path.join(tmp, "out.wav")
+        estd.MonoWriter(filename=raw, format="wav", sampleRate=SAMPLE_RATE)(
+            essentia.array(segment.astype(np.float32))
+        )
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", raw, "-filter:a", chain, out],
+            check=True,
+        )
+        stretched = np.array(load_audio(out), dtype=np.float64)
+
+    # atempo lands within a few samples of the requested length.
+    if len(stretched) < n_samples:
+        return np.pad(stretched, (0, n_samples - len(stretched)))
+    return stretched[:n_samples]
+
+
+def loop_to_length(segment, n_samples, fade_samples):
+    """Repeat `segment` until it fills `n_samples`, fading each repeat."""
+    if len(segment) == 0:
+        return segment
+    faded = apply_fades(segment, fade_samples)
+    repeats = int(np.ceil(n_samples / len(faded)))
+    return np.tile(faded, repeats)[:n_samples]
 
 
 def _rms(samples):
@@ -303,12 +383,18 @@ def reconstruct(
     fade_samples=220,
     normalize_loudness=True,
     max_gain=10.0,
+    fill="truncate",
 ):
     """Rebuild the target from source frames.
+
+    `fill` decides what happens when the chosen source note is shorter than the
+    target note; see FILL_STRATEGIES.
 
     Returns (audio, report). `report` records what was actually placed so the
     result can be described rather than just listened to.
     """
+    if fill not in FILL_STRATEGIES:
+        raise ValueError(f"Unknown fill strategy {fill!r}; expected one of {FILL_STRATEGIES}")
     source_scaled, target_scaled = standardize(df_source, df_target, features)
     rng = np.random.default_rng(seed)
 
@@ -316,28 +402,60 @@ def reconstruct(
     generated = np.zeros(len(target_audio))
     loaded = {}
     placements = []
+    all_used_ids = set()
 
     for position in range(len(df_target)):
         target_row = df_target.iloc[position]
-        source_row, deviation, level_limited = select_source_frame(
-            position,
-            target_scaled,
-            source_scaled,
-            df_source,
-            target_row,
-            rng,
-            n_candidates=n_candidates,
-            max_pitch_deviation=max_pitch_deviation,
-            max_gain=max_gain,
-        )
-
-        path = source_row["path"]
-        if path not in loaded:
-            loaded[path] = load_audio(path)
-
         start = int(target_row["start_sample"])
         wanted = int(target_row["end_sample"]) - start
-        segment = render_frame(loaded[path], source_row, wanted, fade_samples=fade_samples)
+
+        def pick(exclude=()):
+            return select_source_frame(
+                position,
+                target_scaled,
+                source_scaled,
+                df_source,
+                target_row,
+                rng,
+                n_candidates=n_candidates,
+                max_pitch_deviation=max_pitch_deviation,
+                max_gain=max_gain,
+                prefer="longest" if fill in ("longest", "concatenate") else "similar",
+                exclude=exclude,
+            )
+
+        def cut(row, n):
+            if row["path"] not in loaded:
+                loaded[row["path"]] = load_audio(row["path"])
+            return render_frame(loaded[row["path"]], row, n, fade_samples=fade_samples)
+
+        source_row, deviation, level_limited = pick()
+        used_ids = [source_row["freesound_id"]]
+
+        if fill == "concatenate":
+            # Keep taking the longest unused frame at this pitch until the note is
+            # covered. Several animals across one held note is the intended effect.
+            segment = cut(source_row, wanted)
+            used_rows = {int(np.flatnonzero(df_source.index == source_row.name)[0])}
+            while len(segment) < wanted:
+                try:
+                    nxt, _, _ = pick(exclude=tuple(used_rows))
+                except ValueError:
+                    break
+                used_rows.add(int(np.flatnonzero(df_source.index == nxt.name)[0]))
+                piece = cut(nxt, wanted - len(segment))
+                if len(piece) == 0:
+                    break
+                segment = np.concatenate([segment, piece])
+                used_ids.append(nxt["freesound_id"])
+        elif fill == "loop":
+            segment = loop_to_length(cut(source_row, wanted), wanted, fade_samples)
+        elif fill == "stretch":
+            segment = apply_fades(
+                time_stretch(cut(source_row, wanted), wanted), fade_samples
+            )
+        else:
+            segment = cut(source_row, wanted)
 
         gain = 1.0
         if normalize_loudness:
@@ -351,6 +469,7 @@ def reconstruct(
             {
                 "target_frame": position,
                 "freesound_id": source_row["freesound_id"],
+                "sounds_used": len(used_ids),
                 "target_pitch": float(target_row["mean_pitch"]),
                 "source_pitch": float(source_row["mean_pitch"]),
                 "pitch_deviation": deviation,
@@ -361,6 +480,7 @@ def reconstruct(
                 "level_limited": level_limited,
             }
         )
+        all_used_ids.update(used_ids)
 
     filled = sum(p["placed_samples"] for p in placements)
     report = {
@@ -373,6 +493,9 @@ def reconstruct(
             np.max([p["pitch_deviation"] for p in placements])
         ),
         "coverage": filled / len(target_audio),
+        # The share of the target's *note* time that got filled. The excerpt is part
+        # rests, so this is the number that says how sparse the result is.
+        "note_coverage": filled / sum(p["requested_samples"] for p in placements),
         "truncated_frames": sum(
             1 for p in placements if p["placed_samples"] < p["requested_samples"]
         ),
@@ -384,5 +507,7 @@ def reconstruct(
         ),
         "gain_applied": [p["gain"] for p in placements],
         "level_limited_frames": sum(1 for p in placements if p["level_limited"]),
+        "fill": fill,
+        "freesound_ids_used": sorted(all_used_ids),
     }
     return generated, report

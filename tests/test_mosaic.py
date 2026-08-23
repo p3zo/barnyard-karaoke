@@ -109,10 +109,11 @@ def test_frames_are_notes_not_note_plus_rest(tmpdir):
 
 def test_scaling_rebalances_the_real_collection():
     print("\nStandardising rebalances the distance (real barnyard collection)")
-    data = os.path.join(os.path.dirname(__file__), "..", "src")
-    df_source = pd.read_csv(os.path.join(data, "dataframe_barnyard_source.csv"), index_col=0)
-    df_target = pd.read_csv(os.path.join(data, "dataframe_over_the_rainbow_target.csv"),
-                            index_col=0)
+    root = os.path.join(os.path.dirname(__file__), "..")
+    df_source = pd.read_csv(
+        os.path.join(root, "data", "collections", "barnyard", "frames.csv"), index_col=0)
+    df_target = pd.read_csv(
+        os.path.join(root, "data", "targets", "over_the_rainbow", "notes.csv"), index_col=0)
     features = mosaic.FEATURE_COLUMNS
 
     raw = (df_source[features].to_numpy(float) - df_target[features].to_numpy(float)[0]) ** 2
@@ -232,7 +233,41 @@ def test_reconstruction(tmpdir):
 
     print(f"      coverage={report['coverage']:.1%}  "
           f"mean|deviation|={report['mean_abs_pitch_deviation']} semitones")
-    return df_target, df_source
+    return df_target, df_source, target_audio
+
+
+def test_fill_strategies(df_target, df_source, target_audio):
+    print("\nFill strategies trade silence for artefacts")
+    features = mosaic.FEATURE_COLUMNS
+    coverage = {}
+    for fill in mosaic.FILL_STRATEGIES:
+        audio, report = mosaic.reconstruct(
+            df_target, df_source, features, target_audio, seed=7, fill=fill
+        )
+        coverage[fill] = report["note_coverage"]
+        check(f"{fill}: output is the target's length", len(audio) == len(target_audio))
+        check(f"{fill}: nothing clips", float(np.abs(audio).max()) <= 1.0,
+              f"peak={np.abs(audio).max():.3f}")
+        check(f"{fill}: audio is finite", bool(np.all(np.isfinite(audio))))
+        check(f"{fill}: note coverage {report['note_coverage']:.0%}", True)
+
+    check("truncate leaves gaps", coverage["truncate"] < 0.95)
+    check("longest beats truncate", coverage["longest"] >= coverage["truncate"],
+          f"{coverage['truncate']:.0%} -> {coverage['longest']:.0%}")
+    for fill in ("concatenate", "loop", "stretch"):
+        check(f"{fill} fills every note", coverage[fill] > 0.99, f"{coverage[fill]:.1%}")
+
+    check("an unknown fill strategy is refused",
+          _raises(lambda: mosaic.reconstruct(df_target, df_source, features, target_audio,
+                                             seed=7, fill="nonsense"), "Unknown fill"))
+
+
+def _raises(call, fragment):
+    try:
+        call()
+    except ValueError as error:
+        return fragment in str(error)
+    return False
 
 
 def test_failures_are_loud(df_target, df_source):
@@ -261,7 +296,8 @@ if __name__ == "__main__":
         test_loudness_and_mfcc_are_length_invariant()
         test_frames_are_notes_not_note_plus_rest(tmpdir)
         test_scaling_rebalances_the_real_collection()
-        df_target, df_source = test_reconstruction(tmpdir)
+        df_target, df_source, target_audio = test_reconstruction(tmpdir)
+        test_fill_strategies(df_target, df_source, target_audio)
         test_failures_are_loud(df_target, df_source)
 
     print()

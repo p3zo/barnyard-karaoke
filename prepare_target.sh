@@ -2,40 +2,41 @@
 #
 # Download a YouTube video's audio and cut the excerpt used as a mosaicing target.
 #
-#   ./prepare_target.sh <youtube_id> <start> <duration>
+#   ./prepare_target.sh <name> <youtube_id> <start> <duration>
 #
-# Writes src/targets/short_<youtube_id>.wav at 44.1 kHz, which is what notebook 2 reads.
+# Writes data/targets/<name>/audio.wav at 44.1 kHz, which is what analyze.py reads.
 #
 # The two targets used in the paper:
 #
-#   ./prepare_target.sh V1bFr2SWP1I 00:01:05 10   # Somewhere Over the Rainbow, 1:05-1:15
-#   ./prepare_target.sh _6HzoUcx3eo 00:00:15 20   # Old Macdonald Had A Farm, 0:15-0:35
+#   ./prepare_target.sh over_the_rainbow V1bFr2SWP1I 00:01:05 10   # 1:05-1:15
+#   ./prepare_target.sh old_macdonald   _6HzoUcx3eo 00:00:15 20   # 0:15-0:35
 #
 # Requires yt-dlp and ffmpeg.
 
 set -euo pipefail
 
-if [ "$#" -ne 3 ]; then
+if [ "$#" -ne 4 ]; then
     cat <<'USAGE'
-Usage: ./prepare_target.sh <youtube_id> <start> <duration>
+Usage: ./prepare_target.sh <name> <youtube_id> <start> <duration>
 
-Writes src/targets/short_<youtube_id>.wav at 44.1 kHz, which is what notebook 2 reads.
+Writes data/targets/<name>/audio.wav at 44.1 kHz, which is what analyze.py reads.
 
 The two targets used in the paper:
-  ./prepare_target.sh V1bFr2SWP1I 00:01:05 10   # Somewhere Over the Rainbow, 1:05-1:15
-  ./prepare_target.sh _6HzoUcx3eo 00:00:15 20   # Old Macdonald Had A Farm, 0:15-0:35
+  ./prepare_target.sh over_the_rainbow V1bFr2SWP1I 00:01:05 10
+  ./prepare_target.sh old_macdonald   _6HzoUcx3eo 00:00:15 20
 USAGE
     exit 1
 fi
 
-YOUTUBE_ID="$1"
-START="$2"
-DURATION="$3"
+NAME="$1"
+YOUTUBE_ID="$2"
+START="$3"
+DURATION="$4"
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
-TARGETS_DIR="$REPO_DIR/src/targets"
+TARGETS_DIR="$REPO_DIR/data/targets/$NAME"
 FULL="$TARGETS_DIR/$YOUTUBE_ID.wav"
-EXCERPT="$TARGETS_DIR/short_$YOUTUBE_ID.wav"
+EXCERPT="$TARGETS_DIR/audio.wav"
 
 mkdir -p "$TARGETS_DIR"
 

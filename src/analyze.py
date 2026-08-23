@@ -1,7 +1,7 @@
 """Extract one row of features per note, for a source collection and/or a target file.
 
     python src/analyze.py --collection barnyard
-    python src/analyze.py --target over_the_rainbow --target-path targets/short_V1bFr2SWP1I.wav
+    python src/analyze.py --target over_the_rainbow
 
 The analysis itself lives in mosaic.py; this script configures it, saves the results and
 writes plots. Run `python tests/test_mosaic.py` to check the analysis behaves as described.
@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 import mosaic
+import paths
 
 # The shortest note we want to resolve, in seconds. Derived from the target's tempo and the
 # shortest note value in its melody: at 90 bpm an eighth note is 60/90 * 1/2 = 0.33 s. Set
@@ -26,10 +27,8 @@ DEFAULT_MIN_DURATION = 0.3
 
 
 def analyze_collection(collection, min_duration):
-    dataframe_path = f"dataframe_{collection}.csv"
-    out_path = f"dataframe_{collection}_source.csv"
-
-    df = pd.read_csv(dataframe_path, index_col=0)
+    out_path = paths.collection_frames(collection)
+    df = pd.read_csv(paths.collection_csv(collection), index_col=0)
     rows, skipped_ids = mosaic.analyze_collection(df, min_duration=min_duration)
 
     df_source = pd.DataFrame(rows)
@@ -54,15 +53,15 @@ def analyze_collection(collection, min_duration):
     plt.xlabel("MIDI pitch")
     plt.ylabel("source frames")
     plt.title(f'Pitch coverage of the "{collection}" collection')
-    plot_path = f"plot_{collection}_pitch_coverage.png"
+    plot_path = paths.ensure_parent(paths.plot(f"{collection}_pitch_coverage"))
     plt.savefig(plot_path, dpi=120, bbox_inches="tight")
     plt.close()
     print(f"Wrote {plot_path}")
 
 
-def analyze_target(name, path, min_duration):
-    out_path = f"dataframe_{name}_target.csv"
-
+def analyze_target(name, min_duration):
+    out_path = paths.target_notes(name)
+    path = paths.target_audio(name)
     audio = mosaic.load_audio(path)
     onsets, _, _, pitch_values = mosaic.segment_notes(audio, min_duration=min_duration)
 
@@ -87,7 +86,7 @@ def analyze_target(name, path, min_duration):
     axarr[1].plot(pitch_times[:n], envelope[:n])
     axarr[1].set_title("waveform envelope")
     axarr[1].set_xlabel("time [s]")
-    plot_path = f"plot_{name}_pitch_contour.png"
+    plot_path = paths.ensure_parent(paths.plot(f"{name}_pitch_contour"))
     plt.savefig(plot_path, dpi=120, bbox_inches="tight")
     plt.close()
     print(f"Wrote {plot_path}")
@@ -106,7 +105,7 @@ def analyze_target(name, path, min_duration):
     plt.axis([0, len(audio) / mosaic.SAMPLE_RATE, -1, 1])
     plt.xlabel("time [s]")
     plt.title(f"{name}: detected notes shaded ({len(onsets)} onsets)")
-    plot_path = f"plot_{name}_notes.png"
+    plot_path = paths.ensure_parent(paths.plot(f"{name}_notes"))
     plt.savefig(plot_path, dpi=120, bbox_inches="tight")
     plt.close()
     print(f"Wrote {plot_path}")
@@ -116,21 +115,18 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--collection", help="name of a downloaded collection to analyze")
-    parser.add_argument("--target", help="name to save the target analysis under")
-    parser.add_argument("--target-path", help="audio file to analyze as the target")
+    parser.add_argument("--target", help="name of a target prepared by prepare_target.sh")
     parser.add_argument("--min-duration", type=float, default=DEFAULT_MIN_DURATION,
                         help=f"shortest note to resolve, seconds (default {DEFAULT_MIN_DURATION})")
     args = parser.parse_args()
 
     if not args.collection and not args.target:
         parser.error("give --collection, --target, or both")
-    if bool(args.target) != bool(args.target_path):
-        parser.error("--target and --target-path go together")
 
     if args.collection:
         analyze_collection(args.collection, args.min_duration)
     if args.target:
-        analyze_target(args.target, args.target_path, args.min_duration)
+        analyze_target(args.target, args.min_duration)
 
 
 if __name__ == "__main__":
