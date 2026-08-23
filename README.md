@@ -35,10 +35,15 @@ python reconstruct.py --collection barnyard --target over_the_rainbow
 collection never overwrites another.
 
 `reconstruct.py` takes `--features` (`pitch`, `pitch-loudness` or `pitch-loudness-mfcc`, the
-three sets compared in the paper), `--seed`, `--n-candidates`, and `--max-pitch-deviation`
-(semitones a chosen frame may differ from the target note; `0` keeps the melody in tune,
-higher widens the choice of source material). It prints coverage, pitch deviation and how
-many segments were cut short, and writes the demo mix and plots.
+three sets compared in the paper), `--seed`, `--n-candidates`, and `--max-pitch-deviation`.
+
+Pitch is settled before the other features rank anything, so an exact match is always
+preferred where the collection has one. `--max-pitch-deviation` only says how far to settle
+for when it has nothing at the target's pitch; the default `0` refuses rather than going out
+of tune, and tells you which note it could not fill.
+
+`reconstruct.py` prints coverage, pitch deviation and how many segments were cut short, and
+writes the demo mix and plots.
 
 The analysis and selection logic lives in [src/mosaic.py](src/mosaic.py); the scripts
 configure it, report on it and plot the results.
@@ -60,7 +65,10 @@ Freesound sounds carry per-sound licenses; CC-BY requires crediting the uploader
 forbids commercial use. Notebook 1 writes `credits_<collection>.txt` for this, and notebook 3
 refuses to finish if any sound it used is missing from the collection metadata.
 
-The demo mixes in [demo/](demo/) predate this. The violin ones can still be traced to
+`demo/over_the_rainbow_barnyard_*.mp3` were built with the current code from the collection
+recorded in `src/dataframe_barnyard.csv` and `src/credits_barnyard.txt`, one per feature set.
+
+The other mixes in [demo/](demo/) predate this. The violin ones can still be traced to
 `src/dataframe_violin.csv` (whose `path` column refers to the old layout, but whose Freesound
 IDs and licenses are intact). The barnyard ones cannot: that collection's metadata was
 overwritten by the violin run, so the sounds behind them are unrecoverable. Rebuild the

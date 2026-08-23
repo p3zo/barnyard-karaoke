@@ -186,25 +186,30 @@ def select_source_frame(
 ):
     """Pick a source frame to stand in for one target frame.
 
-    Candidates are first restricted to those within `max_pitch_deviation`
-    semitones of the target note, then ranked by distance over the chosen
-    features, and one of the closest `n_candidates` is picked at random.
+    Pitch is settled first: candidates are the frames at the smallest pitch
+    deviation the collection can offer, provided that is within
+    `max_pitch_deviation`. Only among those does the rest of the feature
+    vector rank them, and one of the closest `n_candidates` is picked at
+    random.
 
-    Ranking on pitch alone and picking uniformly from the top 10 does not
-    preserve pitch: for a target of MIDI 60 the ten nearest frames in the
-    violin collection are 58-62 with no exact match, so a uniform pick lands
-    up to two semitones out of tune.
+    Pitch has to win outright rather than compete on distance. It is one
+    feature against thirteen MFCCs, so ranking the whole pool at once picks a
+    timbrally closer frame a semitone flat even where an exact match exists.
+    Ranking on pitch alone and drawing uniformly from the ten nearest is no
+    better: for a target of MIDI 60 the ten nearest frames in the violin
+    collection are 58-62 with no exact match at all.
 
     Returns (row, pitch_deviation).
     """
     deviations = np.abs(df_source["mean_pitch"].to_numpy(dtype=float) - target_pitch)
-    eligible = np.flatnonzero(deviations <= max_pitch_deviation)
-    if eligible.size == 0:
+    best = deviations.min()
+    if best > max_pitch_deviation:
         raise ValueError(
             f"No source frame within {max_pitch_deviation} semitones of MIDI "
-            f"{target_pitch} (closest is {deviations.min():.0f} away). Widen "
+            f"{target_pitch} (closest is {best:.0f} away). Widen "
             f"max_pitch_deviation or add source material in that register."
         )
+    eligible = np.flatnonzero(deviations == best)
 
     distances = np.linalg.norm(source_scaled[eligible] - target_scaled[target_index], axis=1)
     closest = eligible[np.argsort(distances)[:n_candidates]]

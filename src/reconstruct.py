@@ -41,10 +41,11 @@ def main():
     parser.add_argument("--seed", type=int, default=0,
                         help="seeded so a demo can be regenerated (default 0)")
     parser.add_argument("--max-pitch-deviation", type=float, default=0,
-                        help="semitones a chosen frame may differ from the target note; 0 "
-                             "keeps the melody in tune, higher widens the choice of material")
+                        help="how far, in semitones, to settle for when the collection has "
+                             "nothing at the target note's pitch; 0 means refuse rather than "
+                             "go out of tune. An exact match is always preferred when one exists")
     parser.add_argument("--n-candidates", type=int, default=10,
-                        help="frames within the pitch limit to pick from at random")
+                        help="frames at the best available pitch to pick from at random")
     parser.add_argument("--target-gain", type=float, default=0.15,
                         help="how much of the original to leave under the demo mix")
     args = parser.parse_args()
@@ -76,7 +77,7 @@ def main():
     print()
     print(pd.DataFrame(report["placements"]).to_string())
 
-    reconstructed_path = f"{target_path}.reconstructed.wav"
+    reconstructed_path = f"{target_path}.{args.features}.reconstructed.wav"
     estd.MonoWriter(filename=reconstructed_path, format="wav", sampleRate=mosaic.SAMPLE_RATE)(
         essentia.array(generated_audio.astype(np.float32))
     )
@@ -103,7 +104,7 @@ def main():
     axarr[1].set_title("Reconstructed")
     axarr[1].set_xlabel("time [s]")
     axarr[1].set_ylim(-1, 1)
-    plot_path = f"plot_{args.target}_{args.collection}_reconstruction.png"
+    plot_path = f"plot_{args.target}_{args.collection}_{args.features}_reconstruction.png"
     plt.savefig(plot_path, dpi=120, bbox_inches="tight")
     plt.close()
     print(f"\nWrote {plot_path}")
@@ -117,8 +118,9 @@ def main():
 
     # Encoded with ffmpeg rather than Essentia's AudioWriter, which writes an unplayable
     # file and then segfaults on macOS/arm64 with essentia 2.1b6.dev1389.
-    demo_wav = f"{args.target}_{args.collection}_mix.wav"
-    demo_mp3 = os.path.join("..", "demo", f"{args.target}_{args.collection}_mix.mp3")
+    stem = f"{args.target}_{args.collection}_{args.features}"
+    demo_wav = f"{stem}_mix.wav"
+    demo_mp3 = os.path.join("..", "demo", f"{stem}_mix.mp3")
     estd.MonoWriter(filename=demo_wav, format="wav", sampleRate=mosaic.SAMPLE_RATE)(
         essentia.array(mix)
     )

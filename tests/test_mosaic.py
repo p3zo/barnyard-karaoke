@@ -163,6 +163,15 @@ def test_reconstruction(tmpdir):
           f"{report['frames_placed']}/{len(df_target)}")
     check("every placement is exactly in tune", report["max_abs_pitch_deviation"] == 0,
           f"max deviation={report['max_abs_pitch_deviation']} semitones")
+
+    # Raising the tolerance must not cost tuning where an exact match exists: pitch is
+    # settled before the other features get to rank anything.
+    tolerant, tolerant_report = mosaic.reconstruct(
+        df_target, df_source, features, target_length, seed=7, max_pitch_deviation=3
+    )
+    check("a wider tolerance is not spent where exact matches exist",
+          tolerant_report["max_abs_pitch_deviation"] == 0,
+          f"max deviation={tolerant_report['max_abs_pitch_deviation']} semitones at tolerance 3")
     check("output is the target's length", len(audio) == target_length)
     check("output is not silent", float(np.abs(audio).max()) > 0.01)
 
