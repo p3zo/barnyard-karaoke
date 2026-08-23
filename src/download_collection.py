@@ -35,7 +35,9 @@ COLLECTIONS = {
 
 
 def query_freesound(client, query, filter, sort, num_results):
-    pager = client.text_search(
+    # search() returns the first page already loaded, so iterate it directly. The older
+    # text_search() this replaced needed an explicit next_page() first.
+    pager = client.search(
         query=query,
         filter=filter,
         sort=sort,
@@ -43,7 +45,6 @@ def query_freesound(client, query, filter, sort, num_results):
         group_by_pack=1,
         page_size=num_results,
     )
-    pager.next_page()
     return list(pager)
 
 
@@ -86,6 +87,14 @@ def main():
         )
 
     df = pd.DataFrame([make_record(s, files_dir) for s in sounds])
+
+    # Queries overlap -- a goat answers to both "cow moo" and "bleat" -- and a sound kept
+    # twice would get twice the chance of being picked for any note it matches.
+    duplicated = df.duplicated("freesound_id").sum()
+    if duplicated:
+        print(f"Dropping {duplicated} sounds returned by more than one query")
+        df = df.drop_duplicates("freesound_id").reset_index(drop=True)
+
     df.to_csv(dataframe_path)
     print(f"Saved DataFrame with {len(df)} entries! {dataframe_path}")
 
