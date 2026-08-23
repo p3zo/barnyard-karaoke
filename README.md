@@ -51,10 +51,11 @@ configure it, report on it and plot the results.
 ## Tests
 
 ```sh
-python tests/test_mosaic.py
+python tests/test_mosaic.py     # the analysis and selection logic
+python tests/test_scripts.py    # the scripts end to end
 ```
 
-Synthesises its own audio, so it needs no API key and no downloads. It checks that features
+Both synthesise their own audio, so they need no API key and no downloads. It checks that features
 are comparable across notes of different lengths, that a note excludes the rest that follows
 it, that standardising the features rebalances the distance, and that selection stays in
 tune, does not read past the end of a source note, and is reproducible from its seed.
