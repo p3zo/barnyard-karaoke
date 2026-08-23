@@ -75,6 +75,34 @@ def _loudness_to_rms(loudness):
     return np.asarray(loudness, dtype=float) ** (1.0 / (2 * LOUDNESS_EXPONENT))
 
 
+def _contour_quality(pitch_values, pitch_confidence, onset, duration):
+    """How well the pitch tracker actually held on to this note.
+
+    A frame only reads as a musical note if it is voiced throughout and sits at
+    a steady pitch. Animal calls often are not: a whinny slides across an
+    octave, a bark has no pitch at all.
+    """
+    first = int(round(onset * SAMPLE_RATE / MELODIA_HOP_SIZE))
+    last = int(round((onset + duration) * SAMPLE_RATE / MELODIA_HOP_SIZE))
+    contour = np.asarray(pitch_values[first:last], dtype=float)
+    confidence = np.asarray(pitch_confidence[first:last], dtype=float)
+    if contour.size == 0:
+        return {"voiced_fraction": 0.0, "pitch_drift_cents": np.inf, "pitch_confidence": 0.0}
+
+    voiced = contour > 0
+    if voiced.sum() < 2:
+        drift = np.inf
+    else:
+        cents = 1200 * np.log2(contour[voiced] / np.median(contour[voiced]))
+        drift = float(np.std(cents))
+
+    return {
+        "voiced_fraction": float(voiced.mean()),
+        "pitch_drift_cents": drift,
+        "pitch_confidence": float(np.mean(confidence)) if confidence.size else 0.0,
+    }
+
+
 def _loudness(frame):
     """Length-invariant loudness.
 
@@ -88,10 +116,10 @@ def _loudness(frame):
 def segment_notes(audio, min_duration, pitch_distance_threshold=30, rms_threshold=-4):
     """Estimate the predominant melody and segment it into notes.
 
-    Returns (onsets, durations, midi_pitches, pitch_values), all in seconds
-    except the MIDI pitches and the raw contour.
+    Returns (onsets, durations, midi_pitches, pitch_values, pitch_confidence),
+    all in seconds except the MIDI pitches and the two per-frame contours.
     """
-    pitch_values, _ = estd.PredominantPitchMelodia(
+    pitch_values, pitch_confidence = estd.PredominantPitchMelodia(
         frameSize=MELODIA_FRAME_SIZE, hopSize=MELODIA_HOP_SIZE
     )(audio)
 
@@ -102,7 +130,7 @@ def segment_notes(audio, min_duration, pitch_distance_threshold=30, rms_threshol
         rmsThreshold=rms_threshold,
     )(pitch_values, audio)
 
-    return onsets, durations, midi_pitches, pitch_values
+    return onsets, durations, midi_pitches, pitch_values, pitch_confidence
 
 
 def analyze_sound(audio_path, min_duration, audio_id=None, **segmentation_kwargs):
@@ -112,7 +140,7 @@ def analyze_sound(audio_path, min_duration, audio_id=None, **segmentation_kwargs
     not the rest that follows it.
     """
     audio = load_audio(audio_path)
-    onsets, durations, midi_pitches, _ = segment_notes(
+    onsets, durations, midi_pitches, pitch_values, pitch_confidence = segment_notes(
         audio, min_duration, **segmentation_kwargs
     )
 
@@ -132,6 +160,7 @@ def analyze_sound(audio_path, min_duration, audio_id=None, **segmentation_kwargs
             "mean_pitch": midi_pitch,
             "loudness": _loudness(frame),
         }
+        row.update(_contour_quality(pitch_values, pitch_confidence, onset, duration))
         row.update(dict(zip(MFCC_FEATURES, _mean_mfcc(frame))))
         rows.append(row)
 
@@ -172,6 +201,28 @@ def analyze_collection(df, min_duration, **segmentation_kwargs):
     return rows, skipped_ids
 
 
+def filter_frames(df, max_pitch_drift, min_seconds):
+    """Keep only frames that can stand in for a melody note.
+
+    A frame is usable if it holds one steady pitch: `pitch_drift_cents` is the
+    standard deviation of its contour about its own median, so a bleat that
+    warbles or a whinny that slides across an octave scores high and is cut.
+    Frames too short to carry a note are cut as well.
+
+    Returns (kept, rejected).
+    """
+    seconds = (df["end_sample"] - df["start_sample"]) / SAMPLE_RATE
+    steady = df["pitch_drift_cents"] <= max_pitch_drift
+    long_enough = seconds >= min_seconds
+    keep = steady & long_enough
+
+    rejected = {
+        "unsteady_pitch": int((~steady).sum()),
+        "too_short": int((steady & ~long_enough).sum()),
+    }
+    return df[keep].reset_index(drop=True), rejected
+
+
 def standardize(df_source, df_target, features):
     """Put features on a common scale, fitted on the source collection.
 
@@ -204,6 +255,7 @@ def select_source_frame(
     max_gain=10.0,
     prefer="similar",
     exclude=(),
+    octave_folding=True,
 ):
     """Pick a source frame to stand in for one target frame.
 
@@ -224,11 +276,26 @@ def select_source_frame(
     collection has a same-pitch frame needing at most 1.5x, so this costs
     very little choice.
 
-    Returns (row, pitch_deviation, level_limited), where `level_limited` says
-    no candidate at that pitch was loud enough and the loudest was taken.
+    With `octave_folding`, a frame counts as matching when its pitch class
+    matches, whatever octave it sits in, and frames in the melody's own octave
+    are preferred among those. A collection of animal calls covers few pitches
+    steadily but many pitch classes, and displacing a note by an octave keeps
+    it consonant where settling for a semitone would not.
+
+    Returns (row, pitch_deviation, octave_shift, level_limited), where
+    `level_limited` says no candidate at that pitch was loud enough and the
+    loudest was taken.
     """
     target_pitch = float(target_row["mean_pitch"])
-    deviations = np.abs(df_source["mean_pitch"].to_numpy(dtype=float) - target_pitch)
+    signed = df_source["mean_pitch"].to_numpy(dtype=float) - target_pitch
+
+    if octave_folding:
+        deviations = np.abs(((signed + 6) % 12) - 6)
+        octave_shifts = np.round(signed / 12)
+    else:
+        deviations = np.abs(signed)
+        octave_shifts = np.zeros_like(signed)
+
     if len(exclude):
         deviations = np.where(np.isin(np.arange(len(deviations)), list(exclude)),
                               np.inf, deviations)
@@ -240,6 +307,11 @@ def select_source_frame(
             f"max_pitch_deviation or add source material in that register."
         )
     eligible = np.flatnonzero(deviations == best)
+
+    # Among frames at the best pitch class, stay as close to the melody's own
+    # register as the collection allows.
+    nearest_octave = np.abs(octave_shifts[eligible]).min()
+    eligible = eligible[np.abs(octave_shifts[eligible]) == nearest_octave]
 
     target_rms = _loudness_to_rms(target_row["loudness"])
     source_rms = _loudness_to_rms(df_source["loudness"].to_numpy(dtype=float)[eligible])
@@ -264,7 +336,8 @@ def select_source_frame(
         closest = eligible[np.argsort(distances)[:n_candidates]]
         chosen = int(rng.choice(closest))
 
-    return df_source.iloc[chosen], float(deviations[chosen]), level_limited
+    return (df_source.iloc[chosen], float(deviations[chosen]),
+            int(octave_shifts[chosen]), level_limited)
 
 
 def render_frame(source_audio, source_row, n_samples, fade_samples=220):
@@ -384,6 +457,7 @@ def reconstruct(
     normalize_loudness=True,
     max_gain=10.0,
     fill="truncate",
+    octave_folding=True,
 ):
     """Rebuild the target from source frames.
 
@@ -422,6 +496,7 @@ def reconstruct(
                 max_gain=max_gain,
                 prefer="longest" if fill in ("longest", "concatenate") else "similar",
                 exclude=exclude,
+                octave_folding=octave_folding,
             )
 
         def cut(row, n):
@@ -429,7 +504,7 @@ def reconstruct(
                 loaded[row["path"]] = load_audio(row["path"])
             return render_frame(loaded[row["path"]], row, n, fade_samples=fade_samples)
 
-        source_row, deviation, level_limited = pick()
+        source_row, deviation, octave_shift, level_limited = pick()
         used_ids = [source_row["freesound_id"]]
 
         if fill == "concatenate":
@@ -439,7 +514,7 @@ def reconstruct(
             used_rows = {int(np.flatnonzero(df_source.index == source_row.name)[0])}
             while len(segment) < wanted:
                 try:
-                    nxt, _, _ = pick(exclude=tuple(used_rows))
+                    nxt, _, _, _ = pick(exclude=tuple(used_rows))
                 except ValueError:
                     break
                 used_rows.add(int(np.flatnonzero(df_source.index == nxt.name)[0]))
@@ -473,6 +548,7 @@ def reconstruct(
                 "target_pitch": float(target_row["mean_pitch"]),
                 "source_pitch": float(source_row["mean_pitch"]),
                 "pitch_deviation": deviation,
+                "octave_shift": octave_shift,
                 "requested_samples": wanted,
                 "placed_samples": len(segment),
                 "gain": gain,
@@ -507,6 +583,7 @@ def reconstruct(
         ),
         "gain_applied": [p["gain"] for p in placements],
         "level_limited_frames": sum(1 for p in placements if p["level_limited"]),
+        "octave_shifted_frames": sum(1 for p in placements if p["octave_shift"] != 0),
         "fill": fill,
         "freesound_ids_used": sorted(all_used_ids),
     }

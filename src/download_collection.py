@@ -17,21 +17,57 @@ import paths
 
 METADATA_FIELDS = ["id", "name", "username", "previews", "license", "tags"]
 
-# Durations are capped per query because shorter recordings are more likely to be
-# single-shot sounds than field recordings; cows and sheep get longer because they
-# take longer to vocalise.
+# Tags that mark a recording as unsuitable: field recordings and ambiences carry
+# background noise and several overlapping sources, loops and music are not single calls.
+EXCLUDE_TAGS = " ".join(
+    f"-tag:{tag}"
+    for tag in ("field-recording", "ambience", "ambient", "soundscape", "loop",
+                "music", "atmosphere", "multiple")
+)
+
+# A call has to last long enough to fill a melody note, and stop before it turns into a
+# recording of a farmyard. Sustained, pitched calls are what a melody can be built from,
+# so the collection is weighted towards howls, moos and crows rather than barks, which
+# are short and carry no pitch at all.
+BARNYARD_QUERIES = [
+    ("cat meow", 30),
+    ("cow moo", 30),
+    ("wolf howl", 25),
+    ("dog howl", 25),
+    ("goat bleat", 20),
+    ("sheep baa", 20),
+    ("rooster crow", 20),
+    ("horse whinny", 15),
+    ("duck quack", 10),
+    ("owl hoot", 10),
+]
+
+# A control collection: sustained single notes from real instruments. If the pipeline is
+# working, a melody rebuilt from these should come back recognisable and in tune, which
+# separates faults in the method from the limits of the animal material.
+INSTRUMENT_QUERIES = [
+    ("flute note", 25),
+    ("cello note", 25),
+    ("violin note", 25),
+    ("trumpet note", 20),
+    ("clarinet note", 20),
+    ("saxophone note", 20),
+    ("piano note", 20),
+    ("organ note", 20),
+    ("french horn note", 15),
+    ("oboe note", 15),
+]
+
 COLLECTIONS = {
     "barnyard": [
-        {"num_results": 10, "query": "cat meow", "filter": "duration:[0 TO 5]", "sort": "rating_desc"},
-        {"num_results": 20, "query": "dog bark", "filter": "duration:[0 TO 1]", "sort": "rating_desc"},
-        {"num_results": 20, "query": "cow moo", "filter": "duration:[0 TO 10]", "sort": "rating_desc"},
-        {"num_results": 5, "query": "horse whinny", "filter": "duration:[0 TO 5]", "sort": "rating_desc"},
-        {"num_results": 5, "query": "horse neighing", "filter": "duration:[0 TO 5]", "sort": "rating_desc"},
-        {"num_results": 20, "query": "bird chirp", "filter": "duration:[0 TO 10]", "sort": "rating_desc"},
-        {"num_results": 20, "query": "bleat", "filter": "duration:[0 TO 10]", "sort": "rating_desc"},
+        {"num_results": n, "query": q, "sort": "rating_desc",
+         "filter": f"duration:[0.35 TO 4] {EXCLUDE_TAGS}"}
+        for q, n in BARNYARD_QUERIES
     ],
-    "violin": [
-        {"num_results": 100, "query": "violin", "filter": "ac_single_event:True", "sort": None},
+    "instruments": [
+        {"num_results": n, "query": q, "sort": "rating_desc",
+         "filter": f"duration:[0.5 TO 6] {EXCLUDE_TAGS} -tag:chord -tag:melody -tag:phrase"}
+        for q, n in INSTRUMENT_QUERIES
     ],
 }
 

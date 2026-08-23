@@ -25,19 +25,30 @@ import paths
 # missing onset leaves silence.
 DEFAULT_MIN_DURATION = 0.3
 
+# A source frame is only usable as a melody note if it holds one steady pitch. The default
+# admits a frame whose contour stays within about a quarter tone of its own median.
+DEFAULT_MAX_PITCH_DRIFT = 50.0
+DEFAULT_MIN_FRAME_SECONDS = 0.2
 
-def analyze_collection(collection, min_duration):
+
+def analyze_collection(collection, min_duration, max_pitch_drift, min_frame_seconds):
     out_path = paths.collection_frames(collection)
     df = pd.read_csv(paths.collection_csv(collection), index_col=0)
     rows, skipped_ids = mosaic.analyze_collection(df, min_duration=min_duration)
 
-    df_source = pd.DataFrame(rows)
+    df_source, rejected = mosaic.filter_frames(
+        pd.DataFrame(rows), max_pitch_drift, min_frame_seconds
+    )
+    print(f"\nKept {len(df_source)}/{len(rows)} frames from "
+          f"{df_source['freesound_id'].nunique()} sounds; dropped "
+          f"{rejected['unsteady_pitch']} for unsteady pitch and "
+          f"{rejected['too_short']} for being too short.")
+
     df_source.to_csv(out_path)
     print(f"Saved source DataFrame with {len(df_source)} entries! {out_path}")
 
     if skipped_ids:
-        print("\nSounds that yielded no frames:")
-        print(df[df["freesound_id"].isin(skipped_ids)][["name", "tags"]].to_string())
+        print(f"\n{len(skipped_ids)} sounds yielded no melodic contour at all.")
 
     durations = (df_source["end_sample"] - df_source["start_sample"]) / mosaic.SAMPLE_RATE
     print(
@@ -63,7 +74,7 @@ def analyze_target(name, min_duration):
     out_path = paths.target_notes(name)
     path = paths.target_audio(name)
     audio = mosaic.load_audio(path)
-    onsets, _, _, pitch_values = mosaic.segment_notes(audio, min_duration=min_duration)
+    onsets, _, _, pitch_values, _ = mosaic.segment_notes(audio, min_duration=min_duration)
 
     rows = mosaic.analyze_sound(path, min_duration=min_duration)
     df_target = pd.DataFrame(rows)
@@ -118,13 +129,20 @@ def main():
     parser.add_argument("--target", help="name of a target prepared by prepare_target.sh")
     parser.add_argument("--min-duration", type=float, default=DEFAULT_MIN_DURATION,
                         help=f"shortest note to resolve, seconds (default {DEFAULT_MIN_DURATION})")
+    parser.add_argument("--max-pitch-drift", type=float, default=DEFAULT_MAX_PITCH_DRIFT,
+                        help="drop source frames whose pitch wanders more than this many "
+                             f"cents (default {DEFAULT_MAX_PITCH_DRIFT})")
+    parser.add_argument("--min-frame-seconds", type=float, default=DEFAULT_MIN_FRAME_SECONDS,
+                        help=f"drop source frames shorter than this "
+                             f"(default {DEFAULT_MIN_FRAME_SECONDS})")
     args = parser.parse_args()
 
     if not args.collection and not args.target:
         parser.error("give --collection, --target, or both")
 
     if args.collection:
-        analyze_collection(args.collection, args.min_duration)
+        analyze_collection(args.collection, args.min_duration,
+                           args.max_pitch_drift, args.min_frame_seconds)
     if args.target:
         analyze_target(args.target, args.min_duration)
 

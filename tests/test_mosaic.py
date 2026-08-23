@@ -83,7 +83,7 @@ def test_frames_are_notes_not_note_plus_rest(tmpdir):
     write_melody(path, [60, 62, 64, 65, 67], np.random.default_rng(1))
 
     audio = mosaic.load_audio(path)
-    onsets, durations, _, _ = mosaic.segment_notes(audio, min_duration=0.2)
+    onsets, durations, _, _, _ = mosaic.segment_notes(audio, min_duration=0.2)
     rows = mosaic.analyze_sound(path, min_duration=0.2)
 
     check("a frame per segmented note (none dropped)", len(rows) == len(onsets),
@@ -270,6 +270,56 @@ def _raises(call, fragment):
     return False
 
 
+def test_frame_filtering_and_octave_folding(tmpdir):
+    print("\nUnsteady frames are cut, and pitch classes match across octaves")
+    rng = np.random.default_rng(11)
+
+    steady = os.path.join(tmpdir, "steady.wav")
+    write(steady, tone(69, 1.0, rng))
+    wobbly = os.path.join(tmpdir, "wobbly.wav")
+    # A wide warble, like a bleat: the median pitch holds, so the segmenter keeps it as
+    # one note, but it swings too far to read as that note.
+    n = int(1.0 * FS)
+    t = np.arange(n) / FS
+    freq = 440 * 2 ** (1.5 * np.sin(2 * np.pi * 7 * t) / 12)
+    envelope = np.minimum(1, np.minimum(t / 0.03, (1.0 - t) / 0.08))
+    write(wobbly, 0.4 * envelope * np.sin(2 * np.pi * np.cumsum(freq) / FS))
+
+    rows = (mosaic.analyze_sound(steady, 0.2, audio_id=1)
+            + mosaic.analyze_sound(wobbly, 0.2, audio_id=2))
+    df = pd.DataFrame(rows)
+    drift = {int(r["freesound_id"]): r["pitch_drift_cents"] for _, r in df.iterrows()}
+    check("a steady tone drifts little", drift.get(1, 1e9) < 50, f"{drift.get(1):.1f} cents")
+    check("a warble drifts a lot", drift.get(2, 0) > 60, f"{drift.get(2):.1f} cents")
+
+    kept, rejected = mosaic.filter_frames(df, max_pitch_drift=50, min_seconds=0.2)
+    check("the warble is filtered out", set(kept["freesound_id"]) == {1},
+          f"kept ids {sorted(set(kept['freesound_id']))}, {rejected}")
+
+    # Octave folding: a source an octave below the target is an exact pitch-class match.
+    base = dict(kept.iloc[0])
+    # One frame an octave below the target, one a tritone away in another octave, so the
+    # standardiser has something to vary over and folding has a wrong answer to reject.
+    low = pd.DataFrame([
+        dict(base, mean_pitch=base["mean_pitch"] - 12, loudness=base["loudness"]),
+        dict(base, mean_pitch=base["mean_pitch"] - 6, loudness=base["loudness"] * 0.5),
+    ])
+    target = pd.DataFrame([base])
+    scaled_source, scaled_target = mosaic.standardize(low, target, ["mean_pitch", "loudness"])
+    row, deviation, shift, _ = mosaic.select_source_frame(
+        0, scaled_target, scaled_source, low, target.iloc[0],
+        np.random.default_rng(0), max_pitch_deviation=0, octave_folding=True)
+    check("an octave away is an exact pitch-class match", deviation == 0, f"dev={deviation}")
+    check("the octave displacement is reported", shift == -1, f"shift={shift}")
+
+    def strict():
+        return mosaic.select_source_frame(
+            0, scaled_target, scaled_source, low, target.iloc[0],
+            np.random.default_rng(0), max_pitch_deviation=0, octave_folding=False)
+    check("without folding the same frame is refused",
+          _raises(strict, "No source frame within"))
+
+
 def test_failures_are_loud(df_target, df_source):
     print("\nImpossible requests raise instead of producing silence")
     features = mosaic.FEATURE_COLUMNS
@@ -298,6 +348,7 @@ if __name__ == "__main__":
         test_scaling_rebalances_the_real_collection()
         df_target, df_source, target_audio = test_reconstruction(tmpdir)
         test_fill_strategies(df_target, df_source, target_audio)
+        test_frame_filtering_and_octave_folding(tmpdir)
         test_failures_are_loud(df_target, df_source)
 
     print()

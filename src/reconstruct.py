@@ -48,6 +48,9 @@ def main():
                              "go out of tune. An exact match is always preferred")
     parser.add_argument("--n-candidates", type=int, default=10,
                         help="frames at the best available pitch to pick from at random")
+    parser.add_argument("--no-octave-folding", action="store_true",
+                        help="require the chosen frame to be in the target note's own "
+                             "octave, instead of accepting any octave of its pitch class")
     parser.add_argument("--no-normalize-loudness", action="store_true",
                         help="place segments at their recorded level, instead of scaling "
                              "each to the level of the note it replaces")
@@ -76,6 +79,7 @@ def main():
         max_pitch_deviation=args.max_pitch_deviation,
         normalize_loudness=not args.no_normalize_loudness,
         fill=args.fill,
+        octave_folding=not args.no_octave_folding,
     )
 
     print(f"features:                 {args.features}")
@@ -88,6 +92,7 @@ def main():
     print(f"loudest/quietest segment: {report['rms_spread']:.1f}x")
     print(f"frames cut short:         {report['truncated_frames']}")
     print(f"too quiet to reach level: {report['level_limited_frames']}")
+    print(f"placed in another octave: {report['octave_shifted_frames']}")
     print(f"sounds used:              {len(report['freesound_ids_used'])}")
     print()
     print(pd.DataFrame(report["placements"]).to_string())
