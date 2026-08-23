@@ -20,19 +20,28 @@ Prepare a target excerpt. The two used in the paper:
 ./prepare_target.sh _6HzoUcx3eo 00:00:15 20   # Old Macdonald Had A Farm
 ```
 
-Then run the notebooks in [src/](src/) in order:
+Then run the three scripts from inside [src/](src/), in order:
 
-1. [1-create-source-collection.ipynb](src/1-create-source-collection.ipynb) downloads a
-   collection of sounds from Freesound. Set `COLLECTION` to `barnyard` or `violin`; each
-   writes its own `dataframe_<collection>.csv`, `files_<collection>/` and
-   `credits_<collection>.txt`.
-2. [2-analyze-source-collection-and-target.ipynb](src/2-analyze-source-collection-and-target.ipynb)
-   extracts one row of features per note, for the collection and for the target.
-3. [3-reconstruct-target.ipynb](src/3-reconstruct-target.ipynb) rebuilds the target from
-   source frames and writes a demo mix.
+```sh
+cd src
+python download_collection.py --collection barnyard
+python analyze.py --collection barnyard
+python analyze.py --target over_the_rainbow --target-path targets/short_V1bFr2SWP1I.wav
+python reconstruct.py --collection barnyard --target over_the_rainbow
+```
 
-The analysis and selection logic lives in [src/mosaic.py](src/mosaic.py); the notebooks
-configure it and plot the results.
+`download_collection.py` takes `--collection barnyard` or `violin`; each writes its own
+`dataframe_<collection>.csv`, `files_<collection>/` and `credits_<collection>.txt`, so one
+collection never overwrites another.
+
+`reconstruct.py` takes `--features` (`pitch`, `pitch-loudness` or `pitch-loudness-mfcc`, the
+three sets compared in the paper), `--seed`, `--n-candidates`, and `--max-pitch-deviation`
+(semitones a chosen frame may differ from the target note; `0` keeps the melody in tune,
+higher widens the choice of source material). It prints coverage, pitch deviation and how
+many segments were cut short, and writes the demo mix and plots.
+
+The analysis and selection logic lives in [src/mosaic.py](src/mosaic.py); the scripts
+configure it, report on it and plot the results.
 
 ## Tests
 
