@@ -25,6 +25,9 @@ MFCC_FRAME_SIZE = 2048
 MFCC_HOP_SIZE = 1024
 N_MFCC = 13
 
+# Essentia's Loudness is Stevens' law: energy ** LOUDNESS_EXPONENT.
+LOUDNESS_EXPONENT = 0.67
+
 MFCC_FEATURES = [f"mfcc_{i}" for i in range(N_MFCC)]
 FEATURE_COLUMNS = ["mean_pitch", "loudness"] + MFCC_FEATURES
 
@@ -56,6 +59,11 @@ def _mean_mfcc(frame):
     return np.mean(coefficients, axis=0)
 
 
+def _loudness_to_rms(loudness):
+    """Invert _loudness: it stores rms ** (2 * LOUDNESS_EXPONENT)."""
+    return np.asarray(loudness, dtype=float) ** (1.0 / (2 * LOUDNESS_EXPONENT))
+
+
 def _loudness(frame):
     """Length-invariant loudness.
 
@@ -63,7 +71,7 @@ def _loudness(frame):
     length; dividing by len(frame)**0.67 (rather than len(frame)) makes it the
     0.67 power of mean energy and comparable across notes of different length.
     """
-    return estd.Loudness()(essentia.array(frame)) / len(frame) ** 0.67
+    return estd.Loudness()(essentia.array(frame)) / len(frame) ** LOUDNESS_EXPONENT
 
 
 def segment_notes(audio, min_duration, pitch_distance_threshold=30, rms_threshold=-4):
@@ -179,10 +187,11 @@ def select_source_frame(
     target_scaled,
     source_scaled,
     df_source,
-    target_pitch,
+    target_row,
     rng,
     n_candidates=10,
     max_pitch_deviation=0,
+    max_gain=10.0,
 ):
     """Pick a source frame to stand in for one target frame.
 
@@ -199,8 +208,17 @@ def select_source_frame(
     better: for a target of MIDI 60 the ten nearest frames in the violin
     collection are 58-62 with no exact match at all.
 
-    Returns (row, pitch_deviation).
+    Candidates that would need more than `max_gain` to reach the target note's
+    level are then dropped. Freesound recordings span a ~350x range in level,
+    and a frame recorded 40 dB down cannot be raised to sit with the others
+    without dragging its noise floor up with it. Every note in the barnyard
+    collection has a same-pitch frame that needs at most 1.5x, so this costs
+    very little choice.
+
+    Returns (row, pitch_deviation, level_limited), where `level_limited` says
+    no candidate at that pitch was loud enough and the loudest was taken.
     """
+    target_pitch = float(target_row["mean_pitch"])
     deviations = np.abs(df_source["mean_pitch"].to_numpy(dtype=float) - target_pitch)
     best = deviations.min()
     if best > max_pitch_deviation:
@@ -211,10 +229,23 @@ def select_source_frame(
         )
     eligible = np.flatnonzero(deviations == best)
 
+    target_rms = _loudness_to_rms(target_row["loudness"])
+    source_rms = _loudness_to_rms(df_source["loudness"].to_numpy(dtype=float)[eligible])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        needed_gain = np.where(source_rms > 0, target_rms / source_rms, np.inf)
+
+    level_limited = False
+    loud_enough = eligible[needed_gain <= max_gain]
+    if loud_enough.size:
+        eligible = loud_enough
+    else:
+        level_limited = True
+        eligible = eligible[[int(np.argmin(needed_gain))]]
+
     distances = np.linalg.norm(source_scaled[eligible] - target_scaled[target_index], axis=1)
     closest = eligible[np.argsort(distances)[:n_candidates]]
     chosen = int(rng.choice(closest))
-    return df_source.iloc[chosen], float(deviations[chosen])
+    return df_source.iloc[chosen], float(deviations[chosen]), level_limited
 
 
 def render_frame(source_audio, source_row, n_samples, fade_samples=220):
@@ -240,15 +271,47 @@ def render_frame(source_audio, source_row, n_samples, fade_samples=220):
     return segment
 
 
+def _rms(samples):
+    return float(np.sqrt(np.mean(np.square(samples)))) if len(samples) else 0.0
+
+
+def match_loudness(segment, target_note, max_gain=10.0):
+    """Scale `segment` to sit at the same RMS as the target note it replaces.
+
+    Freesound recordings arrive at wildly different levels, so without this a
+    close-mic'd bark lands ten times louder than a distant moo and the melody
+    is buried under whichever samples happened to be recorded hottest. Matching
+    the target note also carries the original melody's dynamics across.
+
+    The gain is capped, since a near-silent segment would otherwise be
+    amplified into whatever noise it contains, and further limited so the
+    result cannot clip.
+    """
+    source_rms = _rms(segment)
+    target_rms = _rms(target_note)
+    if source_rms == 0.0 or target_rms == 0.0:
+        return segment, 1.0
+
+    gain = min(target_rms / source_rms, max_gain)
+
+    peak = float(np.abs(segment).max())
+    if peak * gain > 1.0:
+        gain = 1.0 / peak
+
+    return segment * gain, gain
+
+
 def reconstruct(
     df_target,
     df_source,
     features,
-    target_length,
+    target_audio,
     seed,
     n_candidates=10,
     max_pitch_deviation=0,
     fade_samples=220,
+    normalize_loudness=True,
+    max_gain=10.0,
 ):
     """Rebuild the target from source frames.
 
@@ -258,21 +321,23 @@ def reconstruct(
     source_scaled, target_scaled = standardize(df_source, df_target, features)
     rng = np.random.default_rng(seed)
 
-    generated = np.zeros(target_length)
+    target_audio = np.asarray(target_audio, dtype=np.float64)
+    generated = np.zeros(len(target_audio))
     loaded = {}
     placements = []
 
     for position in range(len(df_target)):
         target_row = df_target.iloc[position]
-        source_row, deviation = select_source_frame(
+        source_row, deviation, level_limited = select_source_frame(
             position,
             target_scaled,
             source_scaled,
             df_source,
-            float(target_row["mean_pitch"]),
+            target_row,
             rng,
             n_candidates=n_candidates,
             max_pitch_deviation=max_pitch_deviation,
+            max_gain=max_gain,
         )
 
         path = source_row["path"]
@@ -282,6 +347,13 @@ def reconstruct(
         start = int(target_row["start_sample"])
         wanted = int(target_row["end_sample"]) - start
         segment = render_frame(loaded[path], source_row, wanted, fade_samples=fade_samples)
+
+        gain = 1.0
+        if normalize_loudness:
+            segment, gain = match_loudness(
+                segment, target_audio[start : start + len(segment)], max_gain=max_gain
+            )
+
         generated[start : start + len(segment)] = segment
 
         placements.append(
@@ -293,6 +365,9 @@ def reconstruct(
                 "pitch_deviation": deviation,
                 "requested_samples": wanted,
                 "placed_samples": len(segment),
+                "gain": gain,
+                "rms": _rms(segment),
+                "level_limited": level_limited,
             }
         )
 
@@ -306,9 +381,18 @@ def reconstruct(
         "max_abs_pitch_deviation": float(
             np.max([p["pitch_deviation"] for p in placements])
         ),
-        "coverage": filled / target_length,
+        "coverage": filled / len(target_audio),
         "truncated_frames": sum(
             1 for p in placements if p["placed_samples"] < p["requested_samples"]
         ),
+        # How far apart the placed segments sit in level. Before loudness matching
+        # this routinely spanned an order of magnitude across one reconstruction.
+        "rms_spread": (
+            max(p["rms"] for p in placements) / min(p["rms"] for p in placements)
+            if placements and min(p["rms"] for p in placements) > 0
+            else float("inf")
+        ),
+        "gain_applied": [p["gain"] for p in placements],
+        "level_limited_frames": sum(1 for p in placements if p["level_limited"]),
     }
     return generated, report

@@ -34,15 +34,18 @@ def check(name, condition, detail=""):
         failures.append(name)
 
 
-def tone(midi, seconds, rng):
-    """A vibrato'd harmonic tone. Melodia ignores pure sine waves."""
+def tone(midi, seconds, rng, level=1.0):
+    """A vibrato'd harmonic tone. Melodia ignores pure sine waves.
+
+    `level` stands in for how unevenly Freesound recordings are mastered.
+    """
     n = int(seconds * FS)
     t = np.arange(n) / FS
     freq = 440 * 2 ** ((midi - 69) / 12) * (1 + 0.006 * np.sin(2 * np.pi * 5.5 * t))
     phase = 2 * np.pi * np.cumsum(freq) / FS
     envelope = np.minimum(1, np.minimum(t / 0.03, (seconds - t) / 0.08))
     partials = sum((0.7 ** k) * np.sin((k + 1) * phase) for k in range(6))
-    return 0.4 * envelope * partials + 0.002 * rng.standard_normal(n)
+    return level * (0.4 * envelope * partials + 0.002 * rng.standard_normal(n))
 
 
 def write(path, samples):
@@ -141,7 +144,8 @@ def test_reconstruction(tmpdir):
     write_melody(target_path, [60, 62, 64, 65, 67], rng)
     target_rows = mosaic.analyze_sound(target_path, min_duration=0.2)
     df_target = pd.DataFrame(target_rows)
-    target_length = len(mosaic.load_audio(target_path))
+    target_audio = mosaic.load_audio(target_path)
+    target_length = len(target_audio)
 
     # Build the source collection at the pitches actually detected in the
     # target, so an exact match provably exists for every target frame.
@@ -150,14 +154,15 @@ def test_reconstruction(tmpdir):
     source_rows = []
     for index, midi in enumerate(detected * 3):
         path = os.path.join(tmpdir, f"source_{index}.wav")
-        # Deliberately shorter than most target frames, to exercise clamping.
-        write(path, tone(midi, 0.45, rng))
+        # Deliberately shorter than most target frames, to exercise clamping, and at
+        # levels an order of magnitude apart, to exercise loudness matching.
+        write(path, tone(midi, 0.45, rng, level=[1.0, 0.12, 0.4][index % 3]))
         source_rows += mosaic.analyze_sound(path, min_duration=0.2, audio_id=index)
     df_source = pd.DataFrame(source_rows).reset_index(drop=True)
     check("source collection analysed", len(df_source) > 0, f"{len(df_source)} frames")
 
     features = mosaic.FEATURE_COLUMNS
-    audio, report = mosaic.reconstruct(df_target, df_source, features, target_length, seed=7)
+    audio, report = mosaic.reconstruct(df_target, df_source, features, target_audio, seed=7)
 
     check("every target frame was placed", report["frames_placed"] == len(df_target),
           f"{report['frames_placed']}/{len(df_target)}")
@@ -167,7 +172,7 @@ def test_reconstruction(tmpdir):
     # Raising the tolerance must not cost tuning where an exact match exists: pitch is
     # settled before the other features get to rank anything.
     tolerant, tolerant_report = mosaic.reconstruct(
-        df_target, df_source, features, target_length, seed=7, max_pitch_deviation=3
+        df_target, df_source, features, target_audio, seed=7, max_pitch_deviation=3
     )
     check("a wider tolerance is not spent where exact matches exist",
           tolerant_report["max_abs_pitch_deviation"] == 0,
@@ -200,16 +205,31 @@ def test_reconstruction(tmpdir):
 
     faded = worst_boundary_step(audio)
     butt_joined, _ = mosaic.reconstruct(
-        df_target, df_source, features, target_length, seed=7, fade_samples=0
+        df_target, df_source, features, target_audio, seed=7, fade_samples=0
     )
     unfaded = worst_boundary_step(butt_joined)
     check("fades remove the splice discontinuity", faded < 0.01,
           f"boundary step {unfaded:.4f} butt-joined -> {faded:.6f} faded")
 
-    again, _ = mosaic.reconstruct(df_target, df_source, features, target_length, seed=7)
+    again, _ = mosaic.reconstruct(df_target, df_source, features, target_audio, seed=7)
     check("same seed reproduces the audio exactly", np.array_equal(audio, again))
-    differ, _ = mosaic.reconstruct(df_target, df_source, features, target_length, seed=8)
+    differ, _ = mosaic.reconstruct(df_target, df_source, features, target_audio, seed=8)
     check("a different seed varies the result", not np.array_equal(audio, differ))
+
+    # Loudness matching: source recordings arrive at very different levels, and each
+    # placed segment should end up at the level of the note it replaces.
+    _, unmatched = mosaic.reconstruct(df_target, df_source, features, target_audio, seed=7,
+                                      normalize_loudness=False)
+    raw_spread = unmatched["rms_spread"]
+    matched_spread = report["rms_spread"]
+    check("loudness matching tightens the level spread", matched_spread < raw_spread,
+          f"{raw_spread:.1f}x unmatched -> {matched_spread:.1f}x matched")
+    check("matched segments sit near the target note's level", matched_spread < 1.5,
+          f"spread={matched_spread:.2f}x")
+    check("no frame was too quiet to be usable", report["level_limited_frames"] == 0,
+          f"{report['level_limited_frames']} level-limited")
+    check("nothing clips", float(np.abs(audio).max()) <= 1.0,
+          f"peak={np.abs(audio).max():.3f}")
 
     print(f"      coverage={report['coverage']:.1%}  "
           f"mean|deviation|={report['mean_abs_pitch_deviation']} semitones")
@@ -223,7 +243,7 @@ def test_failures_are_loud(df_target, df_source):
     shifted = df_target.copy()
     shifted["mean_pitch"] = shifted["mean_pitch"] + 40  # nothing in the source is this high
     try:
-        mosaic.reconstruct(shifted, df_source, features, 44100, seed=0)
+        mosaic.reconstruct(shifted, df_source, features, np.zeros(44100), seed=0)
         check("unmatchable pitch raises", False, "returned silently")
     except ValueError as error:
         check("unmatchable pitch raises", "No source frame within" in str(error))

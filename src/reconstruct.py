@@ -46,6 +46,10 @@ def main():
                              "go out of tune. An exact match is always preferred when one exists")
     parser.add_argument("--n-candidates", type=int, default=10,
                         help="frames at the best available pitch to pick from at random")
+    parser.add_argument("--no-normalize-loudness", action="store_true",
+                        help="place segments at their recorded level; without this each "
+                             "segment is scaled to the RMS of the note it replaces, since "
+                             "Freesound recordings arrive at wildly different levels")
     parser.add_argument("--target-gain", type=float, default=0.15,
                         help="how much of the original to leave under the demo mix")
     args = parser.parse_args()
@@ -61,10 +65,11 @@ def main():
         df_target,
         df_source,
         FEATURE_SETS[args.features],
-        len(target_audio),
+        target_audio,
         seed=args.seed,
         n_candidates=args.n_candidates,
         max_pitch_deviation=args.max_pitch_deviation,
+        normalize_loudness=not args.no_normalize_loudness,
     )
 
     print(f"features:                 {args.features}")
@@ -74,6 +79,9 @@ def main():
     print(f"max  |pitch deviation|:   {report['max_abs_pitch_deviation']:.2f} semitones")
     print(f"frames cut short:         {report['truncated_frames']} "
           f"(source note shorter than the target note)")
+    print(f"loudest/quietest segment: {report['rms_spread']:.1f}x")
+    print(f"too quiet to reach level:  {report['level_limited_frames']} "
+          f"(no frame at that pitch loud enough; used the loudest)")
     print()
     print(pd.DataFrame(report["placements"]).to_string())
 

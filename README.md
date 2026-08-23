@@ -42,8 +42,13 @@ preferred where the collection has one. `--max-pitch-deviation` only says how fa
 for when it has nothing at the target's pitch; the default `0` refuses rather than going out
 of tune, and tells you which note it could not fill.
 
-`reconstruct.py` prints coverage, pitch deviation and how many segments were cut short, and
-writes the demo mix and plots.
+Each placed segment is scaled to the level of the note it replaces. Freesound recordings
+span roughly a 350x range in level, so without this the loudest samples bury the melody;
+selection also skips frames too quiet to reach the target level without dragging their noise
+floor up. `--no-normalize-loudness` turns both off.
+
+`reconstruct.py` prints coverage, pitch deviation, level spread and how many segments were
+cut short, and writes the demo mix and plots.
 
 The analysis and selection logic lives in [src/mosaic.py](src/mosaic.py); the scripts
 configure it, report on it and plot the results.
@@ -69,11 +74,8 @@ refuses to finish if any sound it used is missing from the collection metadata.
 `demo/over_the_rainbow_barnyard_*.mp3` were built with the current code from the collection
 recorded in `src/dataframe_barnyard.csv` and `src/credits_barnyard.txt`, one per feature set.
 
-The other mixes in [demo/](demo/) predate this. The violin ones can still be traced to
-`src/dataframe_violin.csv` (whose `path` column refers to the old layout, but whose Freesound
-IDs and licenses are intact). The barnyard ones cannot: that collection's metadata was
-overwritten by the violin run, so the sounds behind them are unrecoverable. Rebuild the
-barnyard collection and regenerate those demos before relying on them.
+[demo/v0/](demo/v0/) holds the original demos from before the correctness fixes, kept for
+comparison; see the README there for what is wrong with them.
 
 ## Credits
 
