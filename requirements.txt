@@ -1,0 +1,7 @@
+# Verified against the versions below on macOS/arm64 with Python 3.11.
+essentia==2.1b6.dev1389
+freesound-python @ git+https://github.com/mtg/freesound-python.git
+matplotlib==3.11.1
+numpy==2.4.6
+pandas==3.0.5
+python-dotenv==1.2.3

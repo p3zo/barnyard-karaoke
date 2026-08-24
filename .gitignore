@@ -1,5 +1,9 @@
 .DS_Store
+.env
+__pycache__/
+.idea
 
+# LaTeX build products; main.pdf is committed
 *.aux
 *.bbl
 *.blg
@@ -7,8 +11,9 @@
 *.out
 *.synctex.gz
 
-*.wav
-*.ogg
-
+# Working outputs: plots, rendered wavs, intermediates
 out/
-.idea
+
+# Source and target audio, fetched by the scripts
+data/collections/*/sounds/
+data/targets/*/*.wav
