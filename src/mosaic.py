@@ -197,8 +197,7 @@ def analyze_collection(df, min_duration, **segmentation_kwargs):
         rows += sound_rows
 
     print(
-        "Extracted {0} frames from {1}/{2} sounds; {3} yielded no melodic "
-        "contour and contribute nothing to the collection.".format(
+        "Extracted {0} frames from {1}/{2} sounds. {3} yielded no melodic contour.".format(
             len(rows), len(df) - len(skipped_ids), len(df), len(skipped_ids)
         )
     )

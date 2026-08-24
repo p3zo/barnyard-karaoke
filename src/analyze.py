@@ -34,7 +34,7 @@ DEFAULT_MIN_FRAME_SECONDS = 0.2
 def analyze_collection(collection, min_duration, max_pitch_drift, min_frame_seconds):
     out_path = paths.collection_frames(collection)
     df = pd.read_csv(paths.collection_csv(collection), index_col=0)
-    rows, skipped_ids = mosaic.analyze_collection(df, min_duration=min_duration)
+    rows, _ = mosaic.analyze_collection(df, min_duration=min_duration)
 
     df_source, rejected = mosaic.filter_frames(
         pd.DataFrame(rows), max_pitch_drift, min_frame_seconds
@@ -46,9 +46,6 @@ def analyze_collection(collection, min_duration, max_pitch_drift, min_frame_seco
 
     df_source.to_csv(out_path)
     print(f"Saved source DataFrame with {len(df_source)} entries! {out_path}")
-
-    if skipped_ids:
-        print(f"\n{len(skipped_ids)} sounds yielded no melodic contour at all.")
 
     durations = (df_source["end_sample"] - df_source["start_sample"]) / mosaic.SAMPLE_RATE
     print(
