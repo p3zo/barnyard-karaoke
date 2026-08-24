@@ -29,16 +29,19 @@ EXCLUDE_TAGS = " ".join(
 # recording of a farmyard. Sustained, pitched calls are what a melody can be built from,
 # so the collection is weighted towards howls, moos and crows rather than barks, which
 # are short and carry no pitch at all.
+# Counts are set well above what the reconstruction needs. Only about a quarter of
+# animal frames survive the steadiness filter, and what matters is having several
+# different recordings at every pitch class, not just one.
 BARNYARD_QUERIES = [
-    ("cat meow", 30),
-    ("cow moo", 30),
-    ("wolf howl", 25),
-    ("dog howl", 25),
-    ("goat bleat", 20),
-    ("sheep baa", 20),
-    ("rooster crow", 20),
-    ("horse whinny", 15),
-    ("duck quack", 10),
+    ("cat meow", 60),
+    ("dog howl", 50),
+    ("wolf howl", 50),
+    ("cow moo", 40),
+    ("rooster crow", 40),
+    ("duck quack", 30),
+    ("sheep baa", 30),
+    ("goat bleat", 25),
+    ("horse whinny", 18),
     ("owl hoot", 10),
 ]
 

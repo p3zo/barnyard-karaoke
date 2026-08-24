@@ -5,6 +5,7 @@ frame is, how it is described, and which source frame replaces it lives here so
 it can be tested (see tests/test_mosaic.py).
 """
 
+import collections
 import os
 import subprocess
 import tempfile
@@ -254,7 +255,7 @@ def select_source_frame(
     max_pitch_deviation=0,
     max_gain=10.0,
     prefer="similar",
-    exclude=(),
+    avoid_sounds=(),
     octave_folding=True,
 ):
     """Pick a source frame to stand in for one target frame.
@@ -277,10 +278,14 @@ def select_source_frame(
     very little choice.
 
     With `octave_folding`, a frame counts as matching when its pitch class
-    matches, whatever octave it sits in, and frames in the melody's own octave
-    are preferred among those. A collection of animal calls covers few pitches
-    steadily but many pitch classes, and displacing a note by an octave keeps
-    it consonant where settling for a semitone would not.
+    matches, whatever octave it sits in, and frames nearer the melody's own
+    octave rank higher. A collection of animal calls covers few pitches steadily
+    but many pitch classes, and displacing a note by an octave keeps it
+    consonant where settling for a semitone would not.
+
+    `avoid_sounds` holds recordings to pass over -- ones just used, which would
+    otherwise be heard as the same animal twice in a row. It is a preference,
+    not a rule: if nothing else is available the pool is used as it stands.
 
     Returns (row, pitch_deviation, octave_shift, level_limited), where
     `level_limited` says no candidate at that pitch was loud enough and the
@@ -296,9 +301,7 @@ def select_source_frame(
         deviations = np.abs(signed)
         octave_shifts = np.zeros_like(signed)
 
-    if len(exclude):
-        deviations = np.where(np.isin(np.arange(len(deviations)), list(exclude)),
-                              np.inf, deviations)
+
     best = deviations.min()
     if not np.isfinite(best) or best > max_pitch_deviation:
         raise ValueError(
@@ -308,10 +311,12 @@ def select_source_frame(
         )
     eligible = np.flatnonzero(deviations == best)
 
-    # Among frames at the best pitch class, stay as close to the melody's own
-    # register as the collection allows.
-    nearest_octave = np.abs(octave_shifts[eligible]).min()
-    eligible = eligible[np.abs(octave_shifts[eligible]) == nearest_octave]
+    # Skip recordings just used, so long as that leaves something to choose from.
+    if len(avoid_sounds):
+        ids = df_source["freesound_id"].to_numpy()
+        fresh = eligible[~np.isin(ids[eligible], list(avoid_sounds))]
+        if fresh.size:
+            eligible = fresh
 
     target_rms = _loudness_to_rms(target_row["loudness"])
     source_rms = _loudness_to_rms(df_source["loudness"].to_numpy(dtype=float)[eligible])
@@ -330,10 +335,14 @@ def select_source_frame(
         lengths = (df_source["end_sample"].to_numpy() - df_source["start_sample"].to_numpy())
         chosen = int(eligible[np.argmax(lengths[eligible])])
     else:
+        # Register is a preference rather than a filter: restricting to the single
+        # nearest octave leaves some notes with one candidate and no choice at all,
+        # so the same frame lands under every occurrence of that pitch.
         distances = np.linalg.norm(
             source_scaled[eligible] - target_scaled[target_index], axis=1
         )
-        closest = eligible[np.argsort(distances)[:n_candidates]]
+        order = np.lexsort((distances, np.abs(octave_shifts[eligible])))
+        closest = eligible[order[:n_candidates]]
         chosen = int(rng.choice(closest))
 
     return (df_source.iloc[chosen], float(deviations[chosen]),
@@ -477,13 +486,15 @@ def reconstruct(
     loaded = {}
     placements = []
     all_used_ids = set()
+    # Enough history that a recording is not heard again while it is still fresh.
+    recent_sounds = collections.deque(maxlen=3)
 
     for position in range(len(df_target)):
         target_row = df_target.iloc[position]
         start = int(target_row["start_sample"])
         wanted = int(target_row["end_sample"]) - start
 
-        def pick(exclude=()):
+        def pick(also_avoid=()):
             return select_source_frame(
                 position,
                 target_scaled,
@@ -495,7 +506,7 @@ def reconstruct(
                 max_pitch_deviation=max_pitch_deviation,
                 max_gain=max_gain,
                 prefer="longest" if fill == "longest" else "similar",
-                exclude=exclude,
+                avoid_sounds=tuple(recent_sounds) + tuple(also_avoid),
                 octave_folding=octave_folding,
             )
 
@@ -513,13 +524,15 @@ def reconstruct(
             # animals differ from note to note; always taking the longest would put the
             # same one under every occurrence of a pitch.
             segment = cut(source_row, wanted)
-            used_rows = {int(np.flatnonzero(df_source.index == source_row.name)[0])}
+            # Avoid by recording, not by frame: one recording of three barks would
+            # otherwise supply all three pieces and sound like a single stutter.
+            in_this_note = [source_row["freesound_id"]]
             while len(segment) < wanted:
                 try:
-                    nxt, _, _, _ = pick(exclude=tuple(used_rows))
+                    nxt, _, _, _ = pick(also_avoid=tuple(in_this_note))
                 except ValueError:
                     break
-                used_rows.add(int(np.flatnonzero(df_source.index == nxt.name)[0]))
+                in_this_note.append(nxt["freesound_id"])
                 piece = cut(nxt, wanted - len(segment))
                 if len(piece) == 0:
                     break
@@ -559,6 +572,7 @@ def reconstruct(
             }
         )
         all_used_ids.update(used_ids)
+        recent_sounds.extend(used_ids)
 
     filled = sum(p["placed_samples"] for p in placements)
     report = {

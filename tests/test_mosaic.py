@@ -267,6 +267,16 @@ def test_fill_strategies(df_target, df_source, target_audio):
           varied["longest"] <= varied["concatenate"],
           f"longest {varied['longest']} vs concatenate {varied['concatenate']}")
 
+    # The same recording under consecutive notes is heard as a stutter, so it is
+    # passed over while alternatives remain.
+    _, report = mosaic.reconstruct(
+        df_target, df_source, features, target_audio, seed=7, fill="concatenate"
+    )
+    ids = [p["freesound_id"] for p in report["placements"]]
+    consecutive = sum(1 for i in range(1, len(ids)) if ids[i] == ids[i - 1])
+    check("no recording repeats on consecutive notes", consecutive == 0,
+          f"{consecutive} consecutive repeats in {ids}")
+
     check("truncate leaves gaps", coverage["truncate"] < 0.95)
     check("longest beats truncate", coverage["longest"] >= coverage["truncate"],
           f"{coverage['truncate']:.0%} -> {coverage['longest']:.0%}")

@@ -59,6 +59,18 @@ def analyze_collection(collection, min_duration, max_pitch_drift, min_frame_seco
     print(f"pitch coverage: MIDI {pitches.min():.0f}-{pitches.max():.0f}, "
           f"{pitches.nunique()} distinct pitches")
 
+    # What decides whether a repeated note sounds repetitive is how many different
+    # recordings sit at its pitch class, not how many frames.
+    by_class = (df_source.assign(pitch_class=df_source["mean_pitch"].astype(int) % 12)
+                .groupby("pitch_class")["freesound_id"].nunique())
+    by_class = by_class.reindex(range(12), fill_value=0)
+    print("recordings per pitch class: "
+          + " ".join(f"{n}:{c}" for n, c in by_class.items()))
+    thin = by_class[by_class < 3]
+    if len(thin):
+        print(f"  thin pitch classes (under 3 recordings): {list(thin.index)} -- a melody "
+              f"landing there repeatedly will reuse the same sound")
+
     plt.figure(figsize=(15, 3))
     plt.hist(pitches, bins=np.arange(pitches.min(), pitches.max() + 2) - 0.5)
     plt.xlabel("MIDI pitch")
