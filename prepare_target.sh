@@ -1,15 +1,7 @@
 #!/bin/bash
 #
 # Download a YouTube video's audio and cut the excerpt used as a mosaicing target.
-#
-#   ./prepare_target.sh <name> <youtube_id> <start> <duration>
-#
-# Writes data/targets/<name>/audio.wav at 44.1 kHz, which is what analyze.py reads.
-#
-# The two targets used in the paper:
-#
-#   ./prepare_target.sh over_the_rainbow V1bFr2SWP1I 00:01:05 10   # 1:05-1:15
-#   ./prepare_target.sh old_macdonald   _6HzoUcx3eo 00:00:15 20   # 0:15-0:35
+# Run it with no arguments for usage.
 #
 # Requires yt-dlp, ffmpeg, and a JavaScript runtime (deno or node) for YouTube's
 # challenge solver, without which most videos report themselves as unavailable.
@@ -23,8 +15,8 @@ Usage: ./prepare_target.sh <name> <youtube_id> <start> <duration>
 Writes data/targets/<name>/audio.wav at 44.1 kHz, which is what analyze.py reads.
 
 The two targets used in the paper:
-  ./prepare_target.sh over_the_rainbow V1bFr2SWP1I 00:01:05 10
-  ./prepare_target.sh old_macdonald   _6HzoUcx3eo 00:00:15 20
+  ./prepare_target.sh over_the_rainbow V1bFr2SWP1I 00:01:05 10   # 1:05-1:15
+  ./prepare_target.sh old_macdonald   _6HzoUcx3eo 00:00:15 20   # 0:15-0:35
 USAGE
     exit 1
 fi

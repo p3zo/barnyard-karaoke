@@ -1,8 +1,8 @@
 """Analysis and frame-selection logic for the audio mosaicing pipeline.
 
-The notebooks handle orchestration and plotting; the logic that decides what a
-frame is, how it is described, and which source frame replaces it lives here so
-it can be tested (see tests/test_mosaic.py).
+What a frame is, how it is described, and which source frame replaces it are
+decided here, apart from the scripts that orchestrate and plot, so they can be
+tested (see tests/test_mosaic.py).
 """
 
 import collections

@@ -9,8 +9,8 @@ pip install -r requirements.txt
 cp .env.template .env    # then fill in your Freesound key from https://freesound.org/apiv2/apply/
 ```
 
-`prepare_target.sh` additionally needs `yt-dlp` and `ffmpeg` on your PATH. `ffmpeg` is also
-used to time-stretch segments and to encode the demo mixes.
+`ffmpeg` must be on your PATH. It pitch-shifts and time-stretches segments and encodes the
+demo mixes. `prepare_target.sh` also needs `yt-dlp` and a JavaScript runtime (deno or node).
 
 ## Usage
 
@@ -39,54 +39,57 @@ out/reconstructions/       rendered wavs
 demo/                      published mixes
 ```
 
-`data/` holds inputs and the analysis derived from them; the audio itself is fetched by the
-scripts and not committed. `out/` is working output and is not committed. Each collection and
-target lives in its own directory, so one run never overwrites another.
+Every collection and target has its own directory, so one run never overwrites another. The
+audio under `data/` is fetched by the scripts and is not committed, and neither is `out/`.
 
 ## Source material
 
 Two things decide whether a collection is any use.
 
-The queries ask for sustained, pitched calls -- howls, moos, crows -- and exclude field
-recordings, ambiences and loops by tag. Barks are left out: they are short and carry no pitch.
+The queries ask for sustained, pitched calls such as howls, moos and crows, and exclude
+field recordings, ambiences and loops by tag. Barks are left out because they are short and
+carry no pitch.
 
-Then `analyze.py` drops frames that cannot stand in for a melody note. `pitch_drift_cents` is
-the standard deviation of a frame's pitch contour about its own median, so a bleat that
+Then `analyze.py` drops frames that cannot stand in for a melody note. `pitch_drift_cents`
+is the standard deviation of a frame's pitch contour about its own median, so a bleat that
 warbles or a whinny that slides scores high and is cut by `--max-pitch-drift` (default 50,
-about a quarter tone). `--min-frame-seconds` drops frames too short to carry a note. On the
-animal collection this keeps about a quarter of the frames; on the instrument collection,
-about two thirds, which is the difference the filter is there to find.
+about a quarter tone). `--min-frame-seconds` drops frames too short to carry a note. This
+keeps 215 of 814 animal frames against 252 of 404 instrument frames, 26% against 62%,
+which is the gap the filter exists to find.
 
 ## Options
 
-`reconstruct.py` takes:
+`python src/reconstruct.py --help` lists every flag. The ones worth knowing about:
 
-- `--features` — `pitch`, `pitch-loudness` or `pitch-loudness-mfcc`, the three sets compared
-  in the paper.
-- `--fill` — what to do when the chosen source note is shorter than the target note, which is
-  the usual case. `truncate` leaves the rest of the note silent; `longest` picks the longest
-  frame at the right pitch; `concatenate` runs several frames together; `loop` repeats one
-  frame; `stretch` slows one frame down to fit.
-- `--max-pitch-deviation` — how far to settle for when the collection has nothing at the
-  target's pitch class. Pitch is settled before the other features rank anything, so an exact
-  match is always preferred. The default `0` refuses rather than going out of tune, and names
-  the note it could not fill.
-- `--no-octave-folding` — by default a frame matches when its pitch class does, whatever
-  octave it sits in, and frames nearer the melody's own octave rank higher. A collection of
-  animal calls holds few pitches steadily but many pitch classes, and displacing a note by an
-  octave keeps it consonant where settling for a semitone would not.
-- `--max-pitch-shift` — semitones a frame may be moved to land it exactly in tune (default 1;
-  `0` disables). Frames already in tune are preferred, so this only comes into play on pitch
-  classes the collection barely covers. It is what stops a repeated note reaching for the same
-  recording every time: MIDI 59 has two recordings sitting on it and forty within a semitone.
-- `--seed`, `--n-candidates`, `--no-normalize-loudness`, `--target-gain`.
+`--fill` decides what happens when the chosen source note is shorter than the target note,
+which is the usual case. `truncate` leaves the rest of the note silent, `longest` picks the
+longest frame at the right pitch, `concatenate` runs several frames together, `loop` repeats
+one frame, `stretch` slows one frame down to fit.
 
-Each placed segment is scaled to the level of the note it replaces, and selection skips frames
-too quiet to get there without dragging their noise floor up; Freesound recordings span
-roughly a 350x range in level.
+`--max-pitch-shift` is how many semitones a frame may be moved to land exactly in tune
+(default 1, `0` disables it). Frames already in tune are preferred, so this only comes into
+play on pitch classes the collection barely covers. It is what stops a repeated note
+reaching for the same recording every time: MIDI 59 has 2 recordings sitting on it and 22
+within a semitone.
 
-Recordings used in the last few notes are passed over while alternatives remain, so the same
-animal is not heard twice in a row.
+`--no-octave-folding` requires the chosen frame to be in the target note's own octave. By
+default a frame matches when its pitch class does, whatever octave it sits in, and frames
+nearer the melody's own octave rank higher. Animal calls hold few pitches steadily but many
+pitch classes, and displacing a note by an octave keeps it consonant where settling for a
+semitone would not.
+
+`--max-pitch-deviation` is how far to settle when nothing reaches the target's pitch class.
+Pitch is settled before the other features rank anything, so an exact match always wins. The
+default `0` refuses rather than going out of tune, and names the note it could not fill.
+
+`--features` selects `pitch`, `pitch-loudness` or `pitch-loudness-mfcc`, the three sets
+compared in the paper.
+
+Two more things happen without a flag. Each placed segment is scaled to the level of the
+note it replaces, and selection skips frames too quiet to get there without dragging their
+noise floor up, because Freesound levels span four orders of magnitude. Recordings used in
+the last few notes are also passed over while alternatives remain, so the same animal is not
+heard twice in a row.
 
 `reconstruct.py` prints coverage, pitch deviation, level spread, how many segments were cut
 short and how many were shifted or displaced by an octave, then writes the reconstruction, a
@@ -94,10 +97,10 @@ plot and a demo mix.
 
 ## Demos
 
-`demo/<target>_<collection>/` holds mixes filed under the setting they vary --
-`by-fill-strategy/` and `by-feature-set/` -- each the reconstruction over a quiet copy of the
-original. Both targets are built from both collections, so the animal versions can be heard
-against the instrument control. [demo/v0/](demo/v0/) holds the first round of demos.
+`demo/<target>_<collection>/` files each mix under the setting it varies, `by-fill-strategy/`
+or `by-feature-set/`. Each one is the reconstruction over a quiet copy of the original. Both
+targets are built from both collections, so the animal versions can be heard against the
+instrument control. [demo/v0/](demo/v0/) holds the first round of mixes.
 
 ## Tests
 
@@ -110,12 +113,12 @@ Both synthesise their own audio, so they need no API key and no downloads.
 
 ## Attribution
 
-Freesound sounds carry per-sound licenses; CC-BY requires crediting the uploader and CC BY-NC
+Freesound sounds are individually licensed. CC-BY requires crediting the uploader and BY-NC
 forbids commercial use. `download_collection.py` writes `credits.txt` alongside each
 collection, and `reconstruct.py` refuses to finish if any sound it used is missing from the
 collection metadata.
 
 ## Credits
 
-These scripts were adapted from templates provided in the
+Adapted from templates provided in the
 [AMP Lab](https://www.upf.edu/web/smc/audio-and-music-processing-lab) course at UPF.

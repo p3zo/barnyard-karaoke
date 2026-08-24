@@ -3,9 +3,9 @@
 Run with `python tests/test_mosaic.py`. Everything is synthesised at runtime,
 so no Freesound key, no downloads and no committed audio are needed.
 
-The fixture is a melody of tones separated by rests. Rests are the point: the
-bug this guards against framed a note as onset -> next onset, which swallowed
-the rest that followed it.
+The fixture is a melody of tones separated by rests. Rests are the point: a
+note runs onset -> onset + duration, so the rest after it stays silent rather
+than being swallowed into the note.
 """
 
 import os

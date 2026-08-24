@@ -1,11 +1,5 @@
-"""Where everything lives. All paths are relative to the repo root, which is where
-the scripts are run from.
-
-    data/collections/<collection>/  collection.csv, credits.txt, frames.csv, sounds/
-    data/targets/<target>/          audio.wav, notes.csv
-    out/plots/                      figures
-    out/reconstructions/            rendered wavs
-    demo/                           published mixes
+"""Where everything lives. Every path is relative to the repo root, which is where the
+scripts are run from. The README sketches the same layout for a reader.
 """
 
 import os

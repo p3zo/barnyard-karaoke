@@ -1,8 +1,8 @@
 """Runs analyze.py and reconstruct.py end to end against a synthetic collection.
 
-Run with `python tests/test_scripts.py`. Checks the command line glue -- arguments,
-filenames, reporting, plotting, encoding -- not the analysis itself, which
-tests/test_mosaic.py covers. Needs ffmpeg on PATH; needs no API key and no downloads.
+Run with `python tests/test_scripts.py`. Checks the command line glue (arguments,
+filenames, reporting, plotting, encoding) rather than the analysis itself, which
+tests/test_mosaic.py covers. Needs ffmpeg on PATH, no API key and no downloads.
 
 download_collection.py is not exercised here because it only talks to Freesound.
 """
