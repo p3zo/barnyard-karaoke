@@ -143,11 +143,11 @@ We select a set of animals that produce sounds in different registers overlappin
 We also select animals with distinct timbres from one another in hopes of adding a bit of dynamism to the result.
 Each API query included a sort condition by descending user rating to get the highest-rated sounds first.
 In a manual exploration of downloaded results we noticed that shorter recordings were typically of higher quality than longer recordings, which often tended to be field recordings clouded with background noise and various non-animal sounds.
-Each collection was filtered to a short duration in order to increase the chance that the query would return single-shot sounds.
-The moos and bleats were allowed to be slightly longer because it seems that cows and sheep take longer to vocalize their thoughts.
+Each collection was filtered to a short duration in order to increase the chance that the query would return single-shot sounds, and tags marking field recordings, ambiences, soundscapes and loops were excluded for the same reason.
+Of the frames extracted from a collection we keep only those that hold one steady pitch, measured as the standard deviation of a frame's pitch contour about its own median and required to stay within a quarter tone.
 
 For comparison, we also create a second source collection of tuned, harmonic sounds.
-Specifically, we download a set of violin notes from Freesound using the "ac\_single\_event" query parameter to specify that the audio should contain a single event, i.e. a single note played on the violin.
+Specifically, we download sustained single notes from ten orchestral and keyboard instruments, filtered to a duration of 0.5 to 6 seconds and excluding sounds tagged as chords, melodies or phrases so that each recording holds a single note.
 
 
 \subsection{Frame selection strategy}
@@ -156,7 +156,8 @@ When selecting which frames to use from the source to recreate the desired chara
 The features are standardised to zero mean and unit variance across the source collection before the distance is computed.
 On raw values this distance is not meaningful: the first MFCC coefficient ranges over several hundred units while loudness ranges over thousandths, so the distance reflects little besides that one coefficient.
 
-Candidates are then restricted to source frames whose estimated pitch matches the target note exactly, and among the ten closest of those we choose one at random so as to add a bit more variation in the result.
+Candidates are then restricted to source frames that land on the target note's pitch class, in any octave, or that can be resampled onto it by at most a semitone, and among the ten closest of those we choose one at random, passing over recordings used in the last few notes, so as to add a bit more variation in the result.
+Frames already in tune are preferred over frames that have to be resampled, and frames nearer the melody's own octave rank first.
 Drawing uniformly from the ten nearest frames without that restriction does not preserve the melody: where the collection holds nothing at the target pitch, all ten can be one or two semitones away, and the reconstruction drifts out of tune.
 
 We experimented with several sets of features for computing this similarity, namely:
@@ -177,14 +178,15 @@ We also experimented with using pitch alone to see if omitting the other feature
 \subsection{Recombination strategy}
 
 The final step in the audio mosaicing process is to define a strategy for how the selected source frames will be combined to reconstruct the target audio. We choose to recombine the selected frames at the pitch onset times determined by the segmentation algorithm. We elect to not allow the overlapping of source frames during recombination.
-A selected frame is frequently shorter than the target note it has to fill, in which case we use only what the source note contains rather than reading past its end into whatever follows it in the source recording.
-Each placed segment is given a 5 ms fade at both ends, without which the joins between segments click audibly.
+A selected frame is frequently shorter than the target note it has to fill, and is never read past its end into whatever follows it in the source recording.
+The remainder is left silent, or covered by concatenating further frames of the same pitch, by looping the frame, or by time-stretching the frame to the note's length.
+Each placed segment is scaled to the loudness of the note it replaces and given a 5 ms fade at both ends, without which the joins between segments click audibly.
 
 \section{Results}
 
-For each reconstruction the pipeline reports the proportion of the target's duration covered by placed frames, the mean absolute difference in semitones between each target note and the source frame chosen for it, and the number of frames truncated because the chosen source note was shorter than the target note.
+For each reconstruction the pipeline reports the proportion of the target's duration covered by placed frames, the mean absolute difference in semitones between each target note and the source frame chosen for it, the number of frames truncated because the chosen source note was shorter than the target note, the ratio between the loudest and quietest placed segment, and how many frames were displaced by an octave or resampled into tune.
 
-Demos of both the animal and violin melody reconstructions can be heard at:
+Demos of both the animal and instrument melody reconstructions can be heard at:
 	\begin{center}
 		\url{https://github.com/p3zo/barnyard-karaoke/tree/main/demo}.
 	\end{center}
@@ -192,31 +194,34 @@ Demos of both the animal and violin melody reconstructions can be heard at:
 % TABLE: SOUND COLLECTION QUERIES
 \begin{table}
     \begin{center}
-    \begin{tabular}{@{}lll@{}}
+    \begin{tabular}{@{}ll@{}}
         \toprule
-        Count & Keyword & Max duration (seconds) \\
+        Count & Keyword \\
         \midrule
-        5 & horse whinny &  5 \\
-        5 & horse neighing &  5 \\
-        10 & cat meow &  5 \\
-        20 & dog bark &  1 \\
-        20 & bleat &  10 \\
-        20 & cow moo &  10 \\
-        20 & bird chirp &  10 \\
+        60 & cat meow \\
+        50 & dog howl \\
+        50 & wolf howl \\
+        40 & cow moo \\
+        40 & rooster crow \\
+        30 & duck quack \\
+        30 & sheep baa \\
+        25 & goat bleat \\
+        18 & horse whinny \\
+        10 & owl hoot \\
         \bottomrule
     \end{tabular}
     \end{center}
-    \caption{Query parameters used in Freesound API requests}
+    \caption{Freesound queries for the animal collection, each filtered to a duration of 0.35 to 4 seconds}
     \label{tab:source-collection-queries}
 \end{table}
 
 \section{Discussion}
 
 Overall, the methodology described in this paper has a ways to go to produce the animal symphonies originally envisioned. The biggest improvement may come from assembling a well-curated sound collection. One glaring issue in the current animal sound collection is that many of the returned query results are actually sounds that are orthogonal to the query. For example, the query for "cat meow" returns results including the sound of pouring food in a cat bowl. Manual verification of the source sounds to remove non-animal sounds could go a long way. A related and larger effect is that a sound enters the collection at all only if a melodic contour can be estimated from it.
-Unpitched sounds, most dog barks among them, yield no frames whatsoever, so a substantial fraction of each downloaded collection contributes nothing to the reconstruction; the analysis step now reports which sounds were dropped on this basis.
+Unpitched sounds yield no frames whatsoever and unsteady ones are cut by the steadiness requirement, so a substantial fraction of each downloaded collection contributes nothing to the reconstruction; the analysis step reports the sounds that yield no contour and the frames cut for unsteady pitch.
 Additionally, there is a high degree of variability in the audio quality of the downloaded sounds. It would be helpful to have a few attributes related to audio quality to filter on when querying Freesound. For example a "signal-to-noise ratio" attribute would help filter out sounds with a lot of background noise. A "harmonic" attribute would be helpful in determining whether a sound is suitable to be used to match any pitch.
 
-Another major improvement could come by using octave reduction. Some source frames match pitches in the target melodies but in a different octave. Labeling each source frame with its pitch class rather than its MIDI note number would increase the coverage of pitch classes that can be matched exactly.
+Octave reduction recovers some of the material that would otherwise go unused. Some source frames match pitches in the target melodies but in a different octave, and labeling each source frame with its pitch class rather than its MIDI note number increases the coverage of pitch classes that can be matched exactly.
 
 While the pitch detection algorithm used worked well on the selected target sounds, there are many complex mixtures for which it does not work well. For these cases, a source separation pre-processing step can be used to isolate the instrument playing the predominant melody, so as to simplify the input for pitch detection.
 
