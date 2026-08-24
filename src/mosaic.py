@@ -40,6 +40,9 @@ LOUDNESS_EXPONENT = 0.67
 #   stretch     slow the one frame down to the note's length
 FILL_STRATEGIES = ("truncate", "longest", "concatenate", "loop", "stretch")
 
+# Below this, ffmpeg's resampling chain emits an empty file rather than a short one.
+PITCH_SHIFT_MIN_SAMPLES = 2048
+
 MFCC_FEATURES = [f"mfcc_{i}" for i in range(N_MFCC)]
 FEATURE_COLUMNS = ["mean_pitch", "loudness"] + MFCC_FEATURES
 
@@ -257,6 +260,7 @@ def select_source_frame(
     prefer="similar",
     avoid_sounds=(),
     octave_folding=True,
+    max_pitch_shift=0.0,
 ):
     """Pick a source frame to stand in for one target frame.
 
@@ -287,6 +291,11 @@ def select_source_frame(
     otherwise be heard as the same animal twice in a row. It is a preference,
     not a rule: if nothing else is available the pool is used as it stands.
 
+    `max_pitch_shift` admits frames that are a semitone or two off and reports
+    how far to move them, which lands them exactly in tune. It widens a thin
+    pitch class from the handful of recordings that happen to sit on it to
+    everything within reach of it. Frames already in tune are preferred.
+
     Returns (row, pitch_deviation, octave_shift, level_limited), where
     `level_limited` says no candidate at that pitch was loud enough and the
     loudest was taken.
@@ -295,21 +304,29 @@ def select_source_frame(
     signed = df_source["mean_pitch"].to_numpy(dtype=float) - target_pitch
 
     if octave_folding:
-        deviations = np.abs(((signed + 6) % 12) - 6)
-        octave_shifts = np.round(signed / 12)
+        # Residual within the nearest octave: how far off the frame is once its
+        # octave is discounted, signed so it doubles as the correction to apply.
+        residuals = ((signed + 6) % 12) - 6
+        octave_shifts = np.round((signed - residuals) / 12)
     else:
-        deviations = np.abs(signed)
+        residuals = signed
         octave_shifts = np.zeros_like(signed)
+    deviations = np.abs(residuals)
 
 
-    best = deviations.min()
-    if not np.isfinite(best) or best > max_pitch_deviation:
-        raise ValueError(
-            f"No source frame within {max_pitch_deviation} semitones of MIDI "
-            f"{target_pitch} (closest is {best:.0f} away). Widen "
-            f"max_pitch_deviation or add source material in that register."
-        )
-    eligible = np.flatnonzero(deviations == best)
+    # Anything within reach of a shift ends up exactly in tune, so all of it is
+    # equally eligible. Only when nothing is does the search settle for a frame
+    # that stays out of tune, and then only for the closest available.
+    eligible = np.flatnonzero(deviations <= max_pitch_shift)
+    if eligible.size == 0:
+        best = deviations.min()
+        if not np.isfinite(best) or best > max_pitch_deviation:
+            raise ValueError(
+                f"No source frame within {max(max_pitch_deviation, max_pitch_shift)} "
+                f"semitones of MIDI {target_pitch} (closest is {best:.0f} away). Widen "
+                f"max_pitch_shift or add source material in that register."
+            )
+        eligible = np.flatnonzero(deviations == best)
 
     # Skip recordings just used, so long as that leaves something to choose from.
     if len(avoid_sounds):
@@ -341,12 +358,22 @@ def select_source_frame(
         distances = np.linalg.norm(
             source_scaled[eligible] - target_scaled[target_index], axis=1
         )
-        order = np.lexsort((distances, np.abs(octave_shifts[eligible])))
+        # In-tune frames first, then the least shifting, then timbre. Shifted
+        # frames only get drawn once the exact ones run out, which is what keeps
+        # a thin pitch class from repeating.
+        order = np.lexsort((distances, deviations[eligible],
+                            np.abs(octave_shifts[eligible])))
         closest = eligible[order[:n_candidates]]
         chosen = int(rng.choice(closest))
 
-    return (df_source.iloc[chosen], float(deviations[chosen]),
-            int(octave_shifts[chosen]), level_limited)
+    residual = float(residuals[chosen])
+    if abs(residual) <= max_pitch_shift:
+        correction, out_of_tune = -residual, 0.0
+    else:
+        correction, out_of_tune = 0.0, abs(residual)
+
+    return (df_source.iloc[chosen], out_of_tune, int(octave_shifts[chosen]),
+            correction, level_limited)
 
 
 def render_frame(source_audio, source_row, n_samples, fade_samples=220):
@@ -416,6 +443,45 @@ def time_stretch(segment, n_samples):
     return stretched[:n_samples]
 
 
+def pitch_shift(segment, semitones):
+    """Move `segment` by `semitones`, keeping its duration.
+
+    Resamples to shift pitch, then pulls the tempo back, both in one ffmpeg
+    pass. Formants move with the pitch, so a large shift sounds like a
+    cartoon; a semitone or two is what this is for.
+    """
+    if semitones == 0 or len(segment) == 0:
+        return segment
+
+    # ffmpeg writes nothing at all for inputs under a couple of thousand samples,
+    # so pad short segments out and trim the result back.
+    original_length = len(segment)
+    if original_length < PITCH_SHIFT_MIN_SAMPLES:
+        segment = np.pad(segment, (0, PITCH_SHIFT_MIN_SAMPLES - original_length))
+
+    ratio = 2 ** (semitones / 12)
+    chain = ",".join(
+        [f"asetrate={SAMPLE_RATE}*{ratio:.9f}", f"aresample={SAMPLE_RATE}"]
+        + [f"atempo={f:.6f}" for f in _atempo_chain(1 / ratio)]
+    )
+
+    with tempfile.TemporaryDirectory() as tmp:
+        raw = os.path.join(tmp, "in.wav")
+        out = os.path.join(tmp, "out.wav")
+        estd.MonoWriter(filename=raw, format="wav", sampleRate=SAMPLE_RATE)(
+            essentia.array(segment.astype(np.float32))
+        )
+        subprocess.run(
+            ["ffmpeg", "-y", "-loglevel", "error", "-i", raw, "-filter:a", chain, out],
+            check=True,
+        )
+        shifted = np.array(load_audio(out), dtype=np.float64)
+
+    if len(shifted) < original_length:
+        return np.pad(shifted, (0, original_length - len(shifted)))
+    return shifted[:original_length]
+
+
 def loop_to_length(segment, n_samples, fade_samples):
     """Repeat `segment` until it fills `n_samples`, fading each repeat."""
     if len(segment) == 0:
@@ -467,6 +533,7 @@ def reconstruct(
     max_gain=10.0,
     fill="truncate",
     octave_folding=True,
+    max_pitch_shift=0.0,
 ):
     """Rebuild the target from source frames.
 
@@ -508,14 +575,16 @@ def reconstruct(
                 prefer="longest" if fill == "longest" else "similar",
                 avoid_sounds=tuple(recent_sounds) + tuple(also_avoid),
                 octave_folding=octave_folding,
+                max_pitch_shift=max_pitch_shift,
             )
 
-        def cut(row, n):
+        def cut(row, n, correction=0.0):
             if row["path"] not in loaded:
                 loaded[row["path"]] = load_audio(row["path"])
-            return render_frame(loaded[row["path"]], row, n, fade_samples=fade_samples)
+            segment = render_frame(loaded[row["path"]], row, n, fade_samples=fade_samples)
+            return pitch_shift(segment, correction) if correction else segment
 
-        source_row, deviation, octave_shift, level_limited = pick()
+        source_row, deviation, octave_shift, correction, level_limited = pick()
         used_ids = [source_row["freesound_id"]]
 
         if fill == "concatenate":
@@ -523,29 +592,31 @@ def reconstruct(
             # Picking at random rather than longest-first is what makes the run of
             # animals differ from note to note; always taking the longest would put the
             # same one under every occurrence of a pitch.
-            segment = cut(source_row, wanted)
+            segment = cut(source_row, wanted, correction)
             # Avoid by recording, not by frame: one recording of three barks would
             # otherwise supply all three pieces and sound like a single stutter.
             in_this_note = [source_row["freesound_id"]]
-            while len(segment) < wanted:
+            # A sliver at the end of a note is inaudible and costs a whole extra
+            # recording, so stop once the gap is down to the length of a fade.
+            while wanted - len(segment) > fade_samples:
                 try:
-                    nxt, _, _, _ = pick(also_avoid=tuple(in_this_note))
+                    nxt, _, _, nxt_correction, _ = pick(also_avoid=tuple(in_this_note))
                 except ValueError:
                     break
                 in_this_note.append(nxt["freesound_id"])
-                piece = cut(nxt, wanted - len(segment))
+                piece = cut(nxt, wanted - len(segment), nxt_correction)
                 if len(piece) == 0:
                     break
                 segment = np.concatenate([segment, piece])
                 used_ids.append(nxt["freesound_id"])
         elif fill == "loop":
-            segment = loop_to_length(cut(source_row, wanted), wanted, fade_samples)
+            segment = loop_to_length(cut(source_row, wanted, correction), wanted, fade_samples)
         elif fill == "stretch":
             segment = apply_fades(
-                time_stretch(cut(source_row, wanted), wanted), fade_samples
+                time_stretch(cut(source_row, wanted, correction), wanted), fade_samples
             )
         else:
-            segment = cut(source_row, wanted)
+            segment = cut(source_row, wanted, correction)
 
         gain = 1.0
         if normalize_loudness:
@@ -564,6 +635,7 @@ def reconstruct(
                 "source_pitch": float(source_row["mean_pitch"]),
                 "pitch_deviation": deviation,
                 "octave_shift": octave_shift,
+                "pitch_correction": correction,
                 "requested_samples": wanted,
                 "placed_samples": len(segment),
                 "gain": gain,
@@ -600,6 +672,8 @@ def reconstruct(
         "gain_applied": [p["gain"] for p in placements],
         "level_limited_frames": sum(1 for p in placements if p["level_limited"]),
         "octave_shifted_frames": sum(1 for p in placements if p["octave_shift"] != 0),
+        "pitch_shifted_frames": sum(1 for p in placements if p["pitch_correction"] != 0),
+        "max_pitch_correction": max(abs(p["pitch_correction"]) for p in placements),
         "fill": fill,
         "freesound_ids_used": sorted(all_used_ids),
     }

@@ -332,7 +332,7 @@ def test_frame_filtering_and_octave_folding(tmpdir):
     ])
     target = pd.DataFrame([base])
     scaled_source, scaled_target = mosaic.standardize(low, target, ["mean_pitch", "loudness"])
-    row, deviation, shift, _ = mosaic.select_source_frame(
+    row, deviation, shift, _, _ = mosaic.select_source_frame(
         0, scaled_target, scaled_source, low, target.iloc[0],
         np.random.default_rng(0), max_pitch_deviation=0, octave_folding=True)
     check("an octave away is an exact pitch-class match", deviation == 0, f"dev={deviation}")
@@ -344,6 +344,52 @@ def test_frame_filtering_and_octave_folding(tmpdir):
             np.random.default_rng(0), max_pitch_deviation=0, octave_folding=False)
     check("without folding the same frame is refused",
           _raises(strict, "No source frame within"))
+
+
+def test_pitch_shifting(tmpdir):
+    print("\nShifting lands a frame exactly in tune without changing its length")
+    rng = np.random.default_rng(3)
+
+    for semitones in (-2, -1, 1, 2):
+        source = tone(69, 1.0, rng)
+        shifted = mosaic.pitch_shift(source, semitones)
+        spectrum = np.abs(np.fft.rfft(shifted * np.hanning(len(shifted))))
+        hz = np.fft.rfftfreq(len(shifted), 1 / FS)[spectrum.argmax()]
+        midi = 69 + 12 * np.log2(hz / 440)
+        check(f"{semitones:+d} semitones lands within 5 cents",
+              abs(midi - (69 + semitones)) < 0.05, f"got MIDI {midi:.2f}")
+        check(f"{semitones:+d} semitones keeps the length", len(shifted) == len(source))
+
+    unshifted = tone(69, 0.5, rng)
+    check("a zero shift is a no-op",
+          np.array_equal(mosaic.pitch_shift(unshifted, 0), unshifted))
+
+    # A collection holding only MIDI 67 can still fill a MIDI 69 note by shifting.
+    rows = []
+    for index, midi in enumerate((67, 64)):
+        path = os.path.join(tmpdir, f"shift_source_{midi}.wav")
+        write(path, tone(midi, 1.2, rng))
+        rows += mosaic.analyze_sound(path, 0.2, audio_id=index)
+    df_source = pd.DataFrame(rows)
+    # Nothing sits on MIDI 69; the nearest is MIDI 67, two semitones below.
+    target = pd.DataFrame([dict(df_source.iloc[0], mean_pitch=69.0)])
+    check("the fixture has no exact match", (df_source["mean_pitch"] == 69).sum() == 0,
+          f"pitches {sorted(df_source['mean_pitch'].unique())}")
+    scaled_source, scaled_target = mosaic.standardize(
+        df_source, target, ["mean_pitch", "loudness"])
+
+    row, out_of_tune, _, correction, _ = mosaic.select_source_frame(
+        0, scaled_target, scaled_source, df_source, target.iloc[0],
+        np.random.default_rng(0), max_pitch_shift=2)
+    check("a frame two semitones off is admitted", out_of_tune == 0, f"{out_of_tune}")
+    check("and the correction closes the gap", correction == 2.0, f"{correction}")
+
+    def no_shift():
+        return mosaic.select_source_frame(
+            0, scaled_target, scaled_source, df_source, target.iloc[0],
+            np.random.default_rng(0), max_pitch_shift=0, max_pitch_deviation=0)
+    check("without shifting the same frame is refused",
+          _raises(no_shift, "No source frame within"))
 
 
 def test_failures_are_loud(df_target, df_source):
@@ -375,6 +421,7 @@ if __name__ == "__main__":
         df_target, df_source, target_audio = test_reconstruction(tmpdir)
         test_fill_strategies(df_target, df_source, target_audio)
         test_frame_filtering_and_octave_folding(tmpdir)
+        test_pitch_shifting(tmpdir)
         test_failures_are_loud(df_target, df_source)
 
     print()

@@ -48,6 +48,11 @@ def main():
                              "go out of tune. An exact match is always preferred")
     parser.add_argument("--n-candidates", type=int, default=10,
                         help="frames at the best available pitch to pick from at random")
+    parser.add_argument("--max-pitch-shift", type=float, default=1.0,
+                        help="semitones a frame may be moved to land exactly in tune "
+                             "(default 1). Frames already in tune are preferred; shifting "
+                             "widens a thin pitch class to everything within reach of it. "
+                             "0 disables it")
     parser.add_argument("--no-octave-folding", action="store_true",
                         help="require the chosen frame to be in the target note's own "
                              "octave, instead of accepting any octave of its pitch class")
@@ -80,6 +85,7 @@ def main():
         normalize_loudness=not args.no_normalize_loudness,
         fill=args.fill,
         octave_folding=not args.no_octave_folding,
+        max_pitch_shift=args.max_pitch_shift,
     )
 
     print(f"features:                 {args.features}")
@@ -93,6 +99,8 @@ def main():
     print(f"frames cut short:         {report['truncated_frames']}")
     print(f"too quiet to reach level: {report['level_limited_frames']}")
     print(f"placed in another octave: {report['octave_shifted_frames']}")
+    print(f"pitch-shifted into tune:  {report['pitch_shifted_frames']} "
+          f"(largest {report['max_pitch_correction']:.0f} semitones)")
     print(f"sounds used:              {len(report['freesound_ids_used'])}")
     print()
     print(pd.DataFrame(report["placements"]).to_string())

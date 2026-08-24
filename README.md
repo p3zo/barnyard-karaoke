@@ -72,17 +72,25 @@ about two thirds, which is the difference the filter is there to find.
   match is always preferred. The default `0` refuses rather than going out of tune, and names
   the note it could not fill.
 - `--no-octave-folding` — by default a frame matches when its pitch class does, whatever
-  octave it sits in, and frames in the melody's own octave are preferred among those. A
-  collection of animal calls holds few pitches steadily but many pitch classes, and displacing
-  a note by an octave keeps it consonant where settling for a semitone would not.
+  octave it sits in, and frames nearer the melody's own octave rank higher. A collection of
+  animal calls holds few pitches steadily but many pitch classes, and displacing a note by an
+  octave keeps it consonant where settling for a semitone would not.
+- `--max-pitch-shift` — semitones a frame may be moved to land it exactly in tune (default 1;
+  `0` disables). Frames already in tune are preferred, so this only comes into play on pitch
+  classes the collection barely covers. It is what stops a repeated note reaching for the same
+  recording every time: MIDI 59 has two recordings sitting on it and forty within a semitone.
 - `--seed`, `--n-candidates`, `--no-normalize-loudness`, `--target-gain`.
 
 Each placed segment is scaled to the level of the note it replaces, and selection skips frames
 too quiet to get there without dragging their noise floor up; Freesound recordings span
 roughly a 350x range in level.
 
-`reconstruct.py` prints coverage, pitch deviation, level spread and how many segments were cut
-short, then writes the reconstruction, a plot and a demo mix.
+Recordings used in the last few notes are passed over while alternatives remain, so the same
+animal is not heard twice in a row.
+
+`reconstruct.py` prints coverage, pitch deviation, level spread, how many segments were cut
+short and how many were shifted or displaced by an octave, then writes the reconstruction, a
+plot and a demo mix.
 
 ## Demos
 
