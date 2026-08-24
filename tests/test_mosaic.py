@@ -251,6 +251,22 @@ def test_fill_strategies(df_target, df_source, target_audio):
         check(f"{fill}: audio is finite", bool(np.all(np.isfinite(audio))))
         check(f"{fill}: note coverage {report['note_coverage']:.0%}", True)
 
+    # concatenate exists to put different sounds across one note; if it were ranked
+    # deterministically it would put the same frame under every note at a given pitch
+    # and end up less varied than looping a single one.
+    varied = {}
+    for fill in ("concatenate", "loop", "longest"):
+        _, report = mosaic.reconstruct(
+            df_target, df_source, features, target_audio, seed=7, fill=fill
+        )
+        varied[fill] = len(report["freesound_ids_used"])
+    check("concatenate is at least as varied as loop",
+          varied["concatenate"] >= varied["loop"],
+          f"concatenate {varied['concatenate']} sounds vs loop {varied['loop']}")
+    check("longest is the least varied, as intended",
+          varied["longest"] <= varied["concatenate"],
+          f"longest {varied['longest']} vs concatenate {varied['concatenate']}")
+
     check("truncate leaves gaps", coverage["truncate"] < 0.95)
     check("longest beats truncate", coverage["longest"] >= coverage["truncate"],
           f"{coverage['truncate']:.0%} -> {coverage['longest']:.0%}")

@@ -494,7 +494,7 @@ def reconstruct(
                 n_candidates=n_candidates,
                 max_pitch_deviation=max_pitch_deviation,
                 max_gain=max_gain,
-                prefer="longest" if fill in ("longest", "concatenate") else "similar",
+                prefer="longest" if fill == "longest" else "similar",
                 exclude=exclude,
                 octave_folding=octave_folding,
             )
@@ -508,8 +508,10 @@ def reconstruct(
         used_ids = [source_row["freesound_id"]]
 
         if fill == "concatenate":
-            # Keep taking the longest unused frame at this pitch until the note is
-            # covered. Several animals across one held note is the intended effect.
+            # Keep appending different frames at this pitch until the note is covered.
+            # Picking at random rather than longest-first is what makes the run of
+            # animals differ from note to note; always taking the longest would put the
+            # same one under every occurrence of a pitch.
             segment = cut(source_row, wanted)
             used_rows = {int(np.flatnonzero(df_source.index == source_row.name)[0])}
             while len(segment) < wanted:
